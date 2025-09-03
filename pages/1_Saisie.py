@@ -107,7 +107,7 @@ with st.container(border=True):
         st.subheader("Entraînement")
         # Ligne 1 : Type de séance + Difficulté + Distance
         cA, cB, cC = st.columns(3)
-        seance_course      = cA.selectbox("Type de séance", ["EF", "Seuil 60", "Seuil 30", "VO2 max", "Sortie longue"], index=0)
+        seance_course      = cA.selectbox("Type de séance", ["", "EF", "Seuil 60", "Seuil 30", "VO2 max", "Sortie longue"], index=0)
         difficulte_seance  = cB.number_input("Difficulté de la séance (/10)", min_value=0, max_value=10, value=0)
         distance_km        = cC.number_input("Distance (km)", min_value=0.0, step=0.1, value=0.0)
 

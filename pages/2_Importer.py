@@ -7,7 +7,7 @@ from zoneinfo import ZoneInfo
 from supa import get_client
 from utils import require_login
 
-# -------------------- PAGE SETUP --------------------
+# ================= PAGE SETUP =================
 st.set_page_config(page_title="Importer — Garmin → journal", layout="wide")
 
 sb = get_client()
@@ -20,11 +20,16 @@ st.title("📥 Importer mes activités Garmin → journal")
 
 st.markdown("""
 Cette page importe un CSV **Garmin Connect (FR)** vers ta table **journal** (colonnes *séance course*).
-- Doublon = **même date** ET **distance proche** ET **D+ proche** ET **D- proche**.
-- Tu confirmes **un par un** les potentiels doublons détectés par rapport à ta base.
+
+**Doublon =** même **date** **ET** distance proche (± tolérance) **ET** D+ proche (± tolérance) **ET** D− proche (± tolérance).
+
+Pour chaque **potentiel doublon**, tu vois **EXISTANT** vs **IMPORT** et tu choisis :
+- **Oui — doublon** → on ignore l’import
+- **Non — pas doublon** → on **insère** l’import
+- **Combiner (compléter l’existant)** → on **met à jour seulement les champs vides** de l’existant avec les infos de l’import
 """)
 
-# -------------------- HELPERS --------------------
+# ================= HELPERS =================
 def _guess_sep(sample: bytes) -> str:
     head = sample.decode(errors="ignore")
     return ';' if head.count(';') > head.count(',') else ','
@@ -42,11 +47,10 @@ def _to_int_nonneg(x):
     try:
         iv = int(round(v))
         return iv if iv >= 0 else None
-    except:
-        return None
+    except: return None
 
 def _to_minutes_hms(x):
-    """'hh:mm:ss' ou 'mm:ss' → minutes entières. Nombre brut: >120 = secondes sinon minutes."""
+    """'hh:mm:ss' ou 'mm:ss' → minutes entières; nombre brut: >120 = secondes sinon minutes."""
     if x is None or (isinstance(x, float) and pd.isna(x)): return None
     s = str(x).strip()
     if re.fullmatch(r"\d{1,2}:\d{2}:\d{2}", s):
@@ -65,7 +69,7 @@ def _pace_to_min_per_km(x):
         m, s2 = s.split(":"); return round(int(m) + int(s2)/60, 2)
     v = _to_float(s); return round(v, 2) if v is not None else None
 
-def _parse_date_only(x, tz="Europe/Zurich"):
+def _parse_date_only(x):
     """'Date' Garmin FR → YYYY-MM-DD"""
     if x is None or (isinstance(x, float) and pd.isna(x)): return None
     s = str(x).strip()
@@ -78,16 +82,16 @@ def _parse_date_only(x, tz="Europe/Zurich"):
     try:
         dt = pd.to_datetime(s, utc=False, errors="raise", dayfirst=True)
         return dt.date().isoformat()
-    except:
-        return None
+    except: return None
 
-# -------------------- PARAMÈTRES DÉDUP --------------------
+# ================= TOLÉRANCES =================
 with st.sidebar:
-    st.header("Tolérances doublons")
-    tol_km = st.number_input("Tolérance distance (km)", min_value=0.0, max_value=2.0, value=0.10, step=0.05, format="%.2f")
-    tol_m  = st.number_input("Tolérance D+ / D- (m)",   min_value=0,   max_value=500, value=15, step=5)
+    st.header("Tolérances (détection de doublons)")
+    tol_km = st.number_input("Distance (± km)", min_value=0.0, max_value=2.0, value=0.10, step=0.05, format="%.2f")
+    tol_m  = st.number_input("D+ / D− (± m)",   min_value=0,   max_value=500, value=15,   step=5)
+    st.markdown("Les comparaisons ne se font **que** si les deux côtés ont une valeur.")
 
-# -------------------- UPLOAD --------------------
+# ================= UPLOAD =================
 uploaded = st.file_uploader("Glisser-déposer le CSV Garmin (FR) ici", type=["csv"])
 if not uploaded:
     st.info("Dans Garmin Connect (FR) : **Rapports → Toutes les activités → Exporter CSV**, puis dépose-le ici.")
@@ -104,7 +108,7 @@ except Exception:
 st.subheader("Aperçu du fichier")
 st.dataframe(df.head(30), use_container_width=True)
 
-# -------------------- MAPPING (prérempli pour Garmin FR) --------------------
+# ================= MAPPING (prérempli FR) =================
 st.subheader("Mapping des colonnes")
 
 cols = [""] + list(df.columns)
@@ -129,7 +133,25 @@ if not col_date:
 
 dry_run = st.checkbox("Dry-run (ne rien écrire en base)", value=True)
 
-# -------------------- TRANSFORMATION --------------------
+# Champs du journal que l’on gère ici
+FIELDS = [
+    "seance_course",
+    "distance_course_km",
+    "dplus_course_m",
+    "dmoins_course_m",
+    "temps_course_min",
+    "allure_course_min_km",
+    "fc_moyenne_course",
+    "ppm_course",
+    "calories_course",
+    # si plus tard tu ajoutes :
+    "temperature_c",
+    "force_vent_course_kmh",
+    "direction_vent",
+    "meteo",
+]
+
+# ================= TRANSFORMATION =================
 def build_rows(df: pd.DataFrame):
     rows, errors = [], []
     for i, r in df.iterrows():
@@ -157,12 +179,19 @@ def build_rows(df: pd.DataFrame):
                 "fc_moyenne_course": _to_int_nonneg(r[col_hr]) if col_hr else None,
                 "ppm_course": _to_int_nonneg(r[col_cadence]) if col_cadence else None,
                 "calories_course": _to_int_nonneg(r[col_calories]) if col_calories else None,
+
+                # par défaut None (ton CSV actuel ne les a pas)
+                "temperature_c": None,
+                "force_vent_course_kmh": None,
+                "direction_vent": None,
+                "meteo": None,
             }
 
-            # Respect des checks >=0 (température non utilisée ici)
+            # bornes (>=0) — température peut être < 0, on n’y touche pas ici
             for key in ["distance_course_km","dplus_course_m","dmoins_course_m",
                         "temps_course_min","allure_course_min_km",
-                        "fc_moyenne_course","ppm_course","calories_course"]:
+                        "fc_moyenne_course","ppm_course","calories_course",
+                        "force_vent_course_kmh"]:
                 v = row.get(key)
                 if isinstance(v, (int, float)) and v is not None and v < 0:
                     row[key] = None
@@ -185,121 +214,185 @@ if errors:
 if not rows_in:
     st.stop()
 
-# -------------------- RÉCUP DB pour les mêmes dates --------------------
+# ================= RÉCUPÉRATION DB (mêmes dates) =================
 dates_needed = sorted({r["date"] for r in rows_in if r.get("date")})
 existing_by_date = {}
 step = 100
 for i in range(0, len(dates_needed), step):
     subset = dates_needed[i:i+step]
     q = (sb.table("journal")
-            .select("id, created_at, date, distance_course_km, dplus_course_m, dmoins_course_m, temps_course_min, allure_course_min_km, fc_moyenne_course, ppm_course, calories_course, seance_course")
+            .select("id, created_at, date, " + ",".join(FIELDS))
             .eq("user_id", user["id"])
             .in_("date", subset)
             .execute())
     for r in (q.data or []):
-        d = r["date"]
-        existing_by_date.setdefault(d, []).append(r)
+        existing_by_date.setdefault(r["date"], []).append(r)
 
-# -------------------- DÉTECTION + VALIDATION MANUELLE des DOUBLONS --------------------
-st.subheader("Vérification des potentiels doublons (vs. base)")
+# ================= DÉTECTION + DÉCISION PAIR-À-PAIR =================
+st.subheader("Potentiels doublons : décision **pair-à-pair**")
 
-# On crée une clé stable par ligne d'import pour les widgets
-def _import_key(idx, row):
-    return f"import_{idx}_{row['date']}_{row.get('distance_course_km')}_{row.get('dplus_course_m')}_{row.get('dmoins_course_m')}"
+def _pair_key(import_idx, import_row, existing_id):
+    return f"dupdec_{import_idx}_{existing_id}_{import_row['date']}"
 
-potentiels = []   # éléments: {row_in, matches_db, decide_key}
-to_insert = []    # sera rempli après décisions utilisateur
+pairs = []       # (idx, import_row, existing_row, key)
+to_insert = []   # import rows to insert
+updates = {}     # existing_id -> patch dict (only fill missing fields)
 
-for idx, row in enumerate(rows_in):
-    same_day = existing_by_date.get(row["date"], [])
-    # Matches: abs distance <= tol_km ET abs d+ <= tol_m ET abs d- <= tol_m
-    matches = []
+for idx, imp in enumerate(rows_in):
+    same_day = existing_by_date.get(imp["date"], [])
+    matched_any = False
+
     for ex in same_day:
-        dist_db = ex.get("distance_course_km")
-        dplus_db = ex.get("dplus_course_m")
-        dmoins_db = ex.get("dmoins_course_m")
-        # Convertir proprement
-        try: dist_db = float(dist_db) if dist_db is not None else None
+        # valeurs DB pour comparaison
+        try: dist_db = float(ex.get("distance_course_km")) if ex.get("distance_course_km") is not None else None
         except: dist_db = None
-        try: dplus_db = int(dplus_db) if dplus_db is not None else None
+        try: dplus_db = int(ex.get("dplus_course_m")) if ex.get("dplus_course_m") is not None else None
         except: dplus_db = None
-        try: dmoins_db = int(dmoins_db) if dmoins_db is not None else None
+        try: dmoins_db = int(ex.get("dmoins_course_m")) if ex.get("dmoins_course_m") is not None else None
         except: dmoins_db = None
 
         ok = True
-        # Distance doit exister des deux côtés
-        if row.get("distance_course_km") is None or dist_db is None: ok = False
-        if ok and abs(row["distance_course_km"] - dist_db) > tol_km: ok = False
-        # d+ et d- doivent exister des deux côtés
-        if ok and (row.get("dplus_course_m") is None or dplus_db is None): ok = False
-        if ok and abs(row["dplus_course_m"] - dplus_db) > tol_m: ok = False
-        if ok and (row.get("dmoins_course_m") is None or dmoins_db is None): ok = False
-        if ok and abs(row["dmoins_course_m"] - dmoins_db) > tol_m: ok = False
+        if imp.get("distance_course_km") is None or dist_db is None: ok = False
+        if ok and abs(imp["distance_course_km"] - dist_db) > tol_km: ok = False
+        if ok and (imp.get("dplus_course_m") is None or dplus_db is None): ok = False
+        if ok and abs(imp["dplus_course_m"] - dplus_db) > tol_m: ok = False
+        if ok and (imp.get("dmoins_course_m") is None or dmoins_db is None): ok = False
+        if ok and abs(imp["dmoins_course_m"] - dmoins_db) > tol_m: ok = False
 
         if ok:
-            # on annote l'écart pour l'affichage
-            matches.append({
-                "id": ex["id"],
-                "created_at": ex["created_at"],
-                "date": ex["date"],
-                "distance_course_km": dist_db,
-                "dplus_course_m": dplus_db,
-                "dmoins_course_m": dmoins_db,
-                "temps_course_min": ex.get("temps_course_min"),
-                "seance_course": ex.get("seance_course"),
-                "diff_km": round(row["distance_course_km"] - dist_db, 3) if row.get("distance_course_km") is not None and dist_db is not None else None,
-                "diff_dplus": (row["dplus_course_m"] - dplus_db) if row.get("dplus_course_m") is not None and dplus_db is not None else None,
-                "diff_dmoins": (row["dmoins_course_m"] - dmoins_db) if row.get("dmoins_course_m") is not None and dmoins_db is not None else None,
-            })
+            matched_any = True
+            pairs.append((idx, imp, ex, _pair_key(idx, imp, ex["id"])))
 
-    if matches:
-        potentiels.append({"idx": idx, "row_in": row, "matches_db": matches, "decide_key": _import_key(idx, row)})
-    else:
-        to_insert.append(row)  # aucun match → insertion d'office
+    if not matched_any:
+        # pas de match → insertion d’office
+        to_insert.append(imp)
 
-if potentiels:
-    st.warning(f"{len(potentiels)} potentiel(s) doublon(s) trouvé(s). Valide-les un par un ci-dessous.")
-    for bloc in potentiels:
-        r = bloc["row_in"]
+if pairs:
+    st.warning(f"{len(pairs)} paire(s) à valider. Choisis une action pour chacune :")
+    for (idx, imp, ex, key) in pairs:
         st.markdown("---")
-        st.markdown(f"**Activité importée (DATE {r['date']})** — Dist: {r.get('distance_course_km')} km | D+: {r.get('dplus_course_m')} m | D-: {r.get('dmoins_course_m')} m | Durée: {r.get('temps_course_min')} min | Type: {r.get('seance_course')}")
-        st.caption(f"Tolérances actuelles: ±{tol_km:.2f} km, ±{tol_m} m")
+        st.markdown(f"### Date {imp['date']} — Candidat doublon")
+        colL, colR = st.columns(2)
 
-        dfm = pd.DataFrame(bloc["matches_db"])
-        st.dataframe(dfm, use_container_width=True)
+        # EXISTANT
+        with colL:
+            st.markdown("**EXISTANT (en base)**")
+            st.table(pd.DataFrame([{
+                "id": ex["id"],
+                "created_at": ex.get("created_at"),
+                "date": ex.get("date"),
+                "type": ex.get("seance_course"),
+                "distance_km": ex.get("distance_course_km"),
+                "dplus_m": ex.get("dplus_course_m"),
+                "dmoins_m": ex.get("dmoins_course_m"),
+                "durée_min": ex.get("temps_course_min"),
+                "allure_min/km": ex.get("allure_course_min_km"),
+                "FC_moy": ex.get("fc_moyenne_course"),
+                "cadence_ppm": ex.get("ppm_course"),
+                "calories": ex.get("calories_course"),
+                "temperature_c": ex.get("temperature_c"),
+                "vent_kmh": ex.get("force_vent_course_kmh"),
+                "direction_vent": ex.get("direction_vent"),
+                "meteo": ex.get("meteo"),
+            }]))
+
+        # IMPORT
+        with colR:
+            st.markdown("**IMPORT (fichier)**")
+            st.table(pd.DataFrame([{
+                "date": imp.get("date"),
+                "type": imp.get("seance_course"),
+                "distance_km": imp.get("distance_course_km"),
+                "dplus_m": imp.get("dplus_course_m"),
+                "dmoins_m": imp.get("dmoins_course_m"),
+                "durée_min": imp.get("temps_course_min"),
+                "allure_min/km": imp.get("allure_course_min_km"),
+                "FC_moy": imp.get("fc_moyenne_course"),
+                "cadence_ppm": imp.get("ppm_course"),
+                "calories": imp.get("calories_course"),
+                "temperature_c": imp.get("temperature_c"),
+                "vent_kmh": imp.get("force_vent_course_kmh"),
+                "direction_vent": imp.get("direction_vent"),
+                "meteo": imp.get("meteo"),
+            }]))
 
         choice = st.radio(
-            "S'agit-il d'un doublon ? (si OUI → n'insère pas cette ligne importée)",
-            options=["Oui, c'est un doublon (ignorer)", "Non, pas un doublon (insérer)"],
+            "Action à appliquer :",
+            options=[
+                "Oui — c'est un doublon (IGNORER l'import)",
+                "Non — pas un doublon (INSÉRER l'import)",
+                "🔗 Combiner (compléter l’existant avec les infos manquantes de l’import)"
+            ],
             index=0,
-            key=bloc["decide_key"]
+            key=key
         )
-        bloc["decision"] = choice
 
-    # Appliquer décisions
-    decided_insert = [b["row_in"] for b in potentiels if b.get("decision") == "Non, pas un doublon (insérer)"]
-    to_insert.extend(decided_insert)
+        # Construire un patch de complétion (sans écraser les valeurs non-null existantes)
+        if choice == "🔗 Combiner (compléter l’existant avec les infos manquantes de l’import)":
+            patch = {}
+            for f in FIELDS:
+                cur = ex.get(f, None)
+                new = imp.get(f, None)
+                if (cur is None or cur == "") and (new is not None and new != ""):
+                    patch[f] = new
+            # Aperçu du patch
+            if patch:
+                st.info(f"Champs à compléter dans l’existant (id {ex['id']}) : {', '.join(list(patch.keys()))}")
+            else:
+                st.warning("Aucun champ à compléter (l’existant est déjà rempli pour ces colonnes).")
+            # Memoriser le patch (fusionner si plusieurs imports visent le même existant)
+            if patch:
+                if ex["id"] not in updates:
+                    updates[ex["id"]] = patch
+                else:
+                    # on ajoute seulement les clés non présentes
+                    for k,v in patch.items():
+                        if k not in updates[ex["id"]]:
+                            updates[ex["id"]][k] = v
 
+    # Appliquer décisions “INSÉRER”
+    for (idx, imp, ex, key) in pairs:
+        if st.session_state.get(key) == "Non — pas un doublon (INSÉRER l'import)":
+            to_insert.append(imp)
 else:
     st.success("Aucun potentiel doublon détecté avec ces tolérances.")
 
-st.info(f"✅ Lignes prêtes à l'insertion (après décisions): **{len(to_insert)}**")
+# ======= Récapitulatif =======
+st.info(f"✅ Lignes prêtes à l'insertion : **{len(to_insert)}**")
+st.info(f"🧩 Lignes existantes à compléter (patchs) : **{len(updates)}**")
 
-# -------------------- INSERTION --------------------
-st.subheader("Insertion dans `journal`")
+if updates:
+    with st.expander("Voir le détail des mises à jour prévues"):
+        preview_rows = []
+        for rid, patch in updates.items():
+            preview_rows.append({"id": rid, "maj_champs": ", ".join(patch.keys())})
+        st.table(pd.DataFrame(preview_rows))
 
-if st.button("✅ Valider l'import"):
+# ================= ACTIONS DB =================
+st.subheader("Écrire en base `journal`")
+
+if st.button("✅ Exécuter (insertions + mises à jour)"):
     if dry_run:
-        st.warning("Dry-run activé : rien n'a été écrit. Décoche Dry-run pour insérer.")
+        st.warning("Dry-run activé : rien n'a été écrit. Décoche Dry-run pour exécuter.")
         st.stop()
-    if not to_insert:
-        st.info("Aucune ligne à insérer.")
-        st.stop()
-    inserted = 0; batch_size = 500
+
+    inserted = 0
+    updated = 0
     try:
-        for i in range(0, len(to_insert), batch_size):
-            sb.table("journal").insert(to_insert[i:i+batch_size]).execute()
-            inserted += len(to_insert[i:i+batch_size])
-        st.success(f"Terminé : {inserted} lignes insérées dans `journal`.")
+        # Insertions
+        if to_insert:
+            batch_size = 500
+            for i in range(0, len(to_insert), batch_size):
+                sb.table("journal").insert(to_insert[i:i+batch_size]).execute()
+                inserted += len(to_insert[i:i+batch_size])
+
+        # Mises à jour (complétion)
+        for rid, patch in updates.items():
+            if patch:
+                # sécurité : on n'écrase pas volontairement les non-NULL → patch construit en amont
+                sb.table("journal").update(patch).eq("id", rid).eq("user_id", user["id"]).execute()
+                updated += 1
+
+        st.success(f"Terminé : {inserted} ligne(s) insérée(s), {updated} ligne(s) mise(s) à jour.")
     except Exception as e:
-        st.error(f"Erreur pendant l'insertion : {e}")
+        st.error(f"Erreur pendant l'écriture : {e}")

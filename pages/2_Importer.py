@@ -7,7 +7,7 @@ from zoneinfo import ZoneInfo
 from supa import get_client
 from utils import require_login
 
-# ================= PAGE SETUP =================
+# =============== PAGE SETUP ===============
 st.set_page_config(page_title="Importer — Garmin → journal", layout="wide")
 
 sb = get_client()
@@ -23,13 +23,13 @@ Cette page importe un CSV **Garmin Connect (FR)** vers ta table **journal** (col
 
 **Doublon =** même **date** **ET** distance proche (± tolérance) **ET** D+ proche (± tolérance) **ET** D− proche (± tolérance).
 
-Pour chaque **potentiel doublon**, tu vois **EXISTANT** vs **IMPORT** et tu choisis :
-- **Oui — doublon** → on ignore l’import
-- **Non — pas doublon** → on **insère** l’import
-- **Combiner (compléter l’existant)** → on **met à jour seulement les champs vides** de l’existant avec les infos de l’import
+Pour chaque **potentiel doublon**, on affiche **l'existant en base (au-dessus)** puis **la ligne importée (en dessous)**, et tu choisis :
+- **Oui — doublon** → on ignore l'import
+- **Non — pas doublon** → on **insère** l'import
+- **Combiner** → on **complète seulement les champs vides** de l’existant avec les infos de l’import
 """)
 
-# ================= HELPERS =================
+# =============== HELPERS ===============
 def _guess_sep(sample: bytes) -> str:
     head = sample.decode(errors="ignore")
     return ';' if head.count(';') > head.count(',') else ','
@@ -84,14 +84,14 @@ def _parse_date_only(x):
         return dt.date().isoformat()
     except: return None
 
-# ================= TOLÉRANCES =================
+# =============== TOLÉRANCES ===============
 with st.sidebar:
     st.header("Tolérances (détection de doublons)")
     tol_km = st.number_input("Distance (± km)", min_value=0.0, max_value=2.0, value=0.10, step=0.05, format="%.2f")
     tol_m  = st.number_input("D+ / D− (± m)",   min_value=0,   max_value=500, value=15,   step=5)
-    st.markdown("Les comparaisons ne se font **que** si les deux côtés ont une valeur.")
+    st.caption("Comparaisons effectuées uniquement si les deux côtés ont une valeur (non NULL).")
 
-# ================= UPLOAD =================
+# =============== UPLOAD ===============
 uploaded = st.file_uploader("Glisser-déposer le CSV Garmin (FR) ici", type=["csv"])
 if not uploaded:
     st.info("Dans Garmin Connect (FR) : **Rapports → Toutes les activités → Exporter CSV**, puis dépose-le ici.")
@@ -108,7 +108,7 @@ except Exception:
 st.subheader("Aperçu du fichier")
 st.dataframe(df.head(30), use_container_width=True)
 
-# ================= MAPPING (prérempli FR) =================
+# =============== MAPPING (FR) ===============
 st.subheader("Mapping des colonnes")
 
 cols = [""] + list(df.columns)
@@ -133,7 +133,7 @@ if not col_date:
 
 dry_run = st.checkbox("Dry-run (ne rien écrire en base)", value=True)
 
-# Champs du journal que l’on gère ici
+# Champs du journal gérés ici (pour la combinaison)
 FIELDS = [
     "seance_course",
     "distance_course_km",
@@ -144,14 +144,13 @@ FIELDS = [
     "fc_moyenne_course",
     "ppm_course",
     "calories_course",
-    # si plus tard tu ajoutes :
     "temperature_c",
     "force_vent_course_kmh",
     "direction_vent",
     "meteo",
 ]
 
-# ================= TRANSFORMATION =================
+# =============== TRANSFORMATION ===============
 def build_rows(df: pd.DataFrame):
     rows, errors = [], []
     for i, r in df.iterrows():
@@ -187,7 +186,7 @@ def build_rows(df: pd.DataFrame):
                 "meteo": None,
             }
 
-            # bornes (>=0) — température peut être < 0, on n’y touche pas ici
+            # respect des bornes (>=0) — température peut être < 0
             for key in ["distance_course_km","dplus_course_m","dmoins_course_m",
                         "temps_course_min","allure_course_min_km",
                         "fc_moyenne_course","ppm_course","calories_course",
@@ -214,7 +213,7 @@ if errors:
 if not rows_in:
     st.stop()
 
-# ================= RÉCUPÉRATION DB (mêmes dates) =================
+# =============== RÉCUP DB (mêmes dates) ===============
 dates_needed = sorted({r["date"] for r in rows_in if r.get("date")})
 existing_by_date = {}
 step = 100
@@ -228,22 +227,22 @@ for i in range(0, len(dates_needed), step):
     for r in (q.data or []):
         existing_by_date.setdefault(r["date"], []).append(r)
 
-# ================= DÉTECTION + DÉCISION PAIR-À-PAIR =================
-st.subheader("Potentiels doublons : décision **pair-à-pair**")
+# =============== DÉTECTION + DÉCISION (VERTICALE) ===============
+st.subheader("Potentiels doublons : décision **pair-à-pair** (EXISTANT au-dessus / IMPORT en dessous)")
 
 def _pair_key(import_idx, import_row, existing_id):
     return f"dupdec_{import_idx}_{existing_id}_{import_row['date']}"
 
-pairs = []       # (idx, import_row, existing_row, key)
-to_insert = []   # import rows to insert
-updates = {}     # existing_id -> patch dict (only fill missing fields)
+pairs = []        # (idx, import_row, existing_row, key)
+to_insert = []    # import rows to insert
+updates = {}      # existing_id -> patch (compléter sans écraser)
 
 for idx, imp in enumerate(rows_in):
     same_day = existing_by_date.get(imp["date"], [])
     matched_any = False
 
     for ex in same_day:
-        # valeurs DB pour comparaison
+        # valeurs DB pour comparer
         try: dist_db = float(ex.get("distance_course_km")) if ex.get("distance_course_km") is not None else None
         except: dist_db = None
         try: dplus_db = int(ex.get("dplus_course_m")) if ex.get("dplus_course_m") is not None else None
@@ -264,57 +263,55 @@ for idx, imp in enumerate(rows_in):
             pairs.append((idx, imp, ex, _pair_key(idx, imp, ex["id"])))
 
     if not matched_any:
-        # pas de match → insertion d’office
         to_insert.append(imp)
+
+chosen_insert_idx = set()  # évite double insert de la même ligne import si plusieurs paires
 
 if pairs:
     st.warning(f"{len(pairs)} paire(s) à valider. Choisis une action pour chacune :")
     for (idx, imp, ex, key) in pairs:
         st.markdown("---")
         st.markdown(f"### Date {imp['date']} — Candidat doublon")
-        colL, colR = st.columns(2)
 
-        # EXISTANT
-        with colL:
-            st.markdown("**EXISTANT (en base)**")
-            st.table(pd.DataFrame([{
-                "id": ex["id"],
-                "created_at": ex.get("created_at"),
-                "date": ex.get("date"),
-                "type": ex.get("seance_course"),
-                "distance_km": ex.get("distance_course_km"),
-                "dplus_m": ex.get("dplus_course_m"),
-                "dmoins_m": ex.get("dmoins_course_m"),
-                "durée_min": ex.get("temps_course_min"),
-                "allure_min/km": ex.get("allure_course_min_km"),
-                "FC_moy": ex.get("fc_moyenne_course"),
-                "cadence_ppm": ex.get("ppm_course"),
-                "calories": ex.get("calories_course"),
-                "temperature_c": ex.get("temperature_c"),
-                "vent_kmh": ex.get("force_vent_course_kmh"),
-                "direction_vent": ex.get("direction_vent"),
-                "meteo": ex.get("meteo"),
-            }]))
+        # EXISTANT — AU-DESSUS
+        st.markdown("**EXISTANT (en base)**")
+        st.table(pd.DataFrame([{
+            "id": ex["id"],
+            "created_at": ex.get("created_at"),
+            "date": ex.get("date"),
+            "type": ex.get("seance_course"),
+            "distance_km": ex.get("distance_course_km"),
+            "dplus_m": ex.get("dplus_course_m"),
+            "dmoins_m": ex.get("dmoins_course_m"),
+            "durée_min": ex.get("temps_course_min"),
+            "allure_min/km": ex.get("allure_course_min_km"),
+            "FC_moy": ex.get("fc_moyenne_course"),
+            "cadence_ppm": ex.get("ppm_course"),
+            "calories": ex.get("calories_course"),
+            "temperature_c": ex.get("temperature_c"),
+            "vent_kmh": ex.get("force_vent_course_kmh"),
+            "direction_vent": ex.get("direction_vent"),
+            "meteo": ex.get("meteo"),
+        }]))
 
-        # IMPORT
-        with colR:
-            st.markdown("**IMPORT (fichier)**")
-            st.table(pd.DataFrame([{
-                "date": imp.get("date"),
-                "type": imp.get("seance_course"),
-                "distance_km": imp.get("distance_course_km"),
-                "dplus_m": imp.get("dplus_course_m"),
-                "dmoins_m": imp.get("dmoins_course_m"),
-                "durée_min": imp.get("temps_course_min"),
-                "allure_min/km": imp.get("allure_course_min_km"),
-                "FC_moy": imp.get("fc_moyenne_course"),
-                "cadence_ppm": imp.get("ppm_course"),
-                "calories": imp.get("calories_course"),
-                "temperature_c": imp.get("temperature_c"),
-                "vent_kmh": imp.get("force_vent_course_kmh"),
-                "direction_vent": imp.get("direction_vent"),
-                "meteo": imp.get("meteo"),
-            }]))
+        # IMPORT — EN DESSOUS
+        st.markdown("**IMPORT (fichier)**")
+        st.table(pd.DataFrame([{
+            "date": imp.get("date"),
+            "type": imp.get("seance_course"),
+            "distance_km": imp.get("distance_course_km"),
+            "dplus_m": imp.get("dplus_course_m"),
+            "dmoins_m": imp.get("dmoins_course_m"),
+            "durée_min": imp.get("temps_course_min"),
+            "allure_min/km": imp.get("allure_course_min_km"),
+            "FC_moy": imp.get("fc_moyenne_course"),
+            "cadence_ppm": imp.get("ppm_course"),
+            "calories": imp.get("calories_course"),
+            "temperature_c": imp.get("temperature_c"),
+            "vent_kmh": imp.get("force_vent_course_kmh"),
+            "direction_vent": imp.get("direction_vent"),
+            "meteo": imp.get("meteo"),
+        }]))
 
         choice = st.radio(
             "Action à appliquer :",
@@ -327,7 +324,7 @@ if pairs:
             key=key
         )
 
-        # Construire un patch de complétion (sans écraser les valeurs non-null existantes)
+        # Si Combiner → construire un patch "remplir les trous"
         if choice == "🔗 Combiner (compléter l’existant avec les infos manquantes de l’import)":
             patch = {}
             for f in FIELDS:
@@ -335,40 +332,36 @@ if pairs:
                 new = imp.get(f, None)
                 if (cur is None or cur == "") and (new is not None and new != ""):
                     patch[f] = new
-            # Aperçu du patch
             if patch:
-                st.info(f"Champs à compléter dans l’existant (id {ex['id']}) : {', '.join(list(patch.keys()))}")
-            else:
-                st.warning("Aucun champ à compléter (l’existant est déjà rempli pour ces colonnes).")
-            # Memoriser le patch (fusionner si plusieurs imports visent le même existant)
-            if patch:
+                st.info(f"Champs complétés (id {ex['id']}) : {', '.join(patch.keys())}")
+                # fusion si plusieurs imports ciblent le même existant
                 if ex["id"] not in updates:
                     updates[ex["id"]] = patch
                 else:
-                    # on ajoute seulement les clés non présentes
                     for k,v in patch.items():
                         if k not in updates[ex["id"]]:
                             updates[ex["id"]][k] = v
+            else:
+                st.warning("Aucun champ à compléter (l’existant est déjà rempli pour ces colonnes).")
 
-    # Appliquer décisions “INSÉRER”
+    # Appliquer les décisions “INSÉRER”
     for (idx, imp, ex, key) in pairs:
-        if st.session_state.get(key) == "Non — pas un doublon (INSÉRER l'import)":
+        if st.session_state.get(key) == "Non — pas un doublon (INSÉRER l'import)" and idx not in chosen_insert_idx:
             to_insert.append(imp)
+            chosen_insert_idx.add(idx)
 else:
     st.success("Aucun potentiel doublon détecté avec ces tolérances.")
 
-# ======= Récapitulatif =======
+# =============== RÉCAP ===============
 st.info(f"✅ Lignes prêtes à l'insertion : **{len(to_insert)}**")
 st.info(f"🧩 Lignes existantes à compléter (patchs) : **{len(updates)}**")
 
 if updates:
     with st.expander("Voir le détail des mises à jour prévues"):
-        preview_rows = []
-        for rid, patch in updates.items():
-            preview_rows.append({"id": rid, "maj_champs": ", ".join(patch.keys())})
+        preview_rows = [{"id": rid, "maj_champs": ", ".join(patch.keys())} for rid, patch in updates.items()]
         st.table(pd.DataFrame(preview_rows))
 
-# ================= ACTIONS DB =================
+# =============== ÉCRITURE DB ===============
 st.subheader("Écrire en base `journal`")
 
 if st.button("✅ Exécuter (insertions + mises à jour)"):
@@ -389,7 +382,6 @@ if st.button("✅ Exécuter (insertions + mises à jour)"):
         # Mises à jour (complétion)
         for rid, patch in updates.items():
             if patch:
-                # sécurité : on n'écrase pas volontairement les non-NULL → patch construit en amont
                 sb.table("journal").update(patch).eq("id", rid).eq("user_id", user["id"]).execute()
                 updated += 1
 

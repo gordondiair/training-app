@@ -2,7 +2,7 @@
 import streamlit as st
 from supa import get_client
 from utils import require_login
-from utils import sidebar_logout_button
+from utils import sidebar_logout_bottom
 
 sb = get_client()
 u = require_login(sb)

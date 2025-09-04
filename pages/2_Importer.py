@@ -152,15 +152,11 @@ def parse_strava_csv(df):
     out = []
     for _, r in df.iterrows():
         d = parse_date_any(r.get(c_date)) if c_date else None
-
-        # ---- KM ONLY ----
-        km = to_float(r.get(c_dist)) if c_dist else None
-
+        km = to_float(r.get(c_dist)) if c_dist else None  # KM ONLY
         dplus  = to_int(r.get(c_gain)) if c_gain else None
         dmoins = to_int(r.get(c_loss)) if c_loss else None
         sec    = hhmmss_to_seconds(r.get(c_time)) if c_time else None
         mins   = int(round(sec/60)) if sec is not None else None
-
         out.append({
             "date": d,
             "distance_course_km": km,
@@ -168,63 +164,88 @@ def parse_strava_csv(df):
             "dmoins_course_m": dmoins,
             "temps_course_min": mins,
         })
-
     df2 = pd.DataFrame(out)
     return df2.dropna(subset=["date","distance_course_km"]).reset_index(drop=True)
 
-# ===== Traitement : n’afficher QUE les doublons =====
+# ===== Traitement : n’afficher QUE les doublons + action globale =====
 def process_import(df_common, source_label):
-    duplicate_decisions = []   # [(row, similar, choice)]
-    to_insert_silent = []      # [row] (aucun affichage)
+    # 1) Partitionner en (doublons, non-doublons)
+    duplicates = []         # list of tuples (row_df, similar_db_row, idx)
+    to_insert_silent = []   # list of row_df
 
     for idx, row in df_common.iterrows():
         day = row["date"]
         existing_rows = load_db_rows_for_date(day)
-
         similar = None
         for ex in existing_rows:
             if is_similar(ex, row):
                 similar = ex
                 break
-
         if similar is None:
-            to_insert_silent.append(row)   # pas d'affichage
-            continue
+            to_insert_silent.append(row)
+        else:
+            duplicates.append((row, similar, idx))
 
-        # ----- Seulement pour les doublons : afficher comparaison -----
-        st.markdown("---")
-        st.subheader(f"{source_label} • {day} — {row['distance_course_km']:.2f} km | D+ {row.get('dplus_course_m') or 0} m | D- {row.get('dmoins_course_m') or 0} m")
-        st.info("🔁 Doublon potentiel : compare **DB (haut)** vs **Import (bas)**")
-
-        with st.container(border=True):
-            st.markdown("**Dans la base (existant)**")
-            c1,c2,c3,c4 = st.columns([1,1,1,1.2])
-            c1.write(f"**Date**\n{similar.get('date')}")
-            c2.write(f"**Km**\n{similar.get('distance_course_km')}")
-            c3.write(f"**D+ / D-**\n{similar.get('dplus_course_m')} / {similar.get('dmoins_course_m')}")
-            c4.write(f"**Durée (min)**\n{similar.get('temps_course_min') or '-'}")
-
-        with st.container(border=True):
-            st.markdown("**Proposé (import)**")
-            c1,c2,c3,c4 = st.columns([1,1,1,1.2])
-            c1.write(f"**Date**\n{row['date']}")
-            c2.write(f"**Km**\n{row['distance_course_km']}")
-            c3.write(f"**D+ / D-**\n{row.get('dplus_course_m')} / {row.get('dmoins_course_m')}")
-            c4.write(f"**Durée (min)**\n{row.get('temps_course_min') or '-'}")
-
-        choice = st.radio(
-            "Que faire ?",
-            ["Ignorer", "Insérer (quand même)", "Remplacer (écraser la DB)", "Combiner (compléter l'existant)"],
-            key=f"choice_{source_label}_{idx}",
+    # 2) Contrôle global (visible uniquement s'il y a des doublons)
+    bulk_action = None
+    if duplicates:
+        st.markdown("### ⚙️ Actions globales sur les doublons")
+        bulk_action = st.radio(
+            "Choisir une action globale (s'applique à tous les doublons ci-dessous) :",
+            [
+                "— (aucune action globale)",
+                "Tout combiner",
+                "Tout remplacer",
+                "Tout ignorer",
+                "Tout insérer quand même",
+            ],
+            key=f"bulk_{source_label}",
             horizontal=True
         )
-        duplicate_decisions.append((row, similar, choice))
 
-    # ----- Application -----
-    if (duplicate_decisions or to_insert_silent) and st.button("✅ Appliquer les décisions", key=f"apply_{source_label}"):
+    # 3) Afficher UNIQUEMENT les doublons (si pas d'action globale, l'utilisateur peut choisir au cas par cas)
+    duplicate_decisions = []   # [(row, similar, choice_str)]
+    if duplicates:
+        for row, similar, idx in duplicates:
+            st.markdown("---")
+            st.subheader(f"{source_label} • {row['date']} — {row['distance_course_km']:.2f} km | D+ {row.get('dplus_course_m') or 0} m | D- {row.get('dmoins_course_m') or 0} m")
+            st.info("🔁 Doublon potentiel : compare **DB (haut)** vs **Import (bas)**")
+
+            with st.container(border=True):
+                st.markdown("**Dans la base (existant)**")
+                c1,c2,c3,c4 = st.columns([1,1,1,1.2])
+                c1.write(f"**Date**\n{similar.get('date')}")
+                c2.write(f"**Km**\n{similar.get('distance_course_km')}")
+                c3.write(f"**D+ / D-**\n{similar.get('dplus_course_m')} / {similar.get('dmoins_course_m')}")
+                c4.write(f"**Durée (min)**\n{similar.get('temps_course_min') or '-'}")
+
+            with st.container(border=True):
+                st.markdown("**Proposé (import)**")
+                c1,c2,c3,c4 = st.columns([1,1,1,1.2])
+                c1.write(f"**Date**\n{row['date']}")
+                c2.write(f"**Km**\n{row['distance_course_km']}")
+                c3.write(f"**D+ / D-**\n{row.get('dplus_course_m')} / {row.get('dmoins_course_m')}")
+                c4.write(f"**Durée (min)**\n{row.get('temps_course_min') or '-'}")
+
+            if bulk_action and bulk_action != "— (aucune action globale)":
+                # On enregistre une "décision virtuelle" — pas d'UI par doublon
+                duplicate_decisions.append((row, similar, bulk_action))
+            else:
+                # Choix individuel
+                choice = st.radio(
+                    "Que faire ?",
+                    ["Ignorer", "Insérer (quand même)", "Remplacer (écraser la DB)", "Combiner (compléter l'existant)"],
+                    key=f"choice_{source_label}_{idx}",
+                    horizontal=True
+                )
+                duplicate_decisions.append((row, similar, choice))
+
+    # 4) Bouton appliquer (il existe même s'il n'y a que des non-doublons => insertion silencieuse)
+    has_anything = bool(duplicates or to_insert_silent)
+    if has_anything and st.button("✅ Appliquer les décisions", key=f"apply_{source_label}"):
         n_ins, n_rep, n_comb, n_skip = 0,0,0,0
 
-        # 1) Insérer silencieusement les nouvelles lignes sans doublon
+        # 4.1 Insérer silencieusement les nouvelles lignes sans doublon
         for row in to_insert_silent:
             payload = {
                 "user_id": user["id"],
@@ -237,12 +258,13 @@ def process_import(df_common, source_label):
             sb.table(TABLE).insert(payload).execute()
             n_ins += 1
 
-        # 2) Traiter les doublons affichés
+        # 4.2 Traiter les doublons
         for row, similar, choice in duplicate_decisions:
-            if choice.startswith("Ignorer"):
+            # Si une action globale a été choisie, on la mappe aux actions concrètes
+            if choice == "Tout ignorer":
                 n_skip += 1
                 continue
-            if choice.startswith("Insérer"):
+            if choice in ["Tout insérer quand même", "Insérer (quand même)"]:
                 payload = {
                     "user_id": user["id"],
                     "date": row["date"],
@@ -253,7 +275,7 @@ def process_import(df_common, source_label):
                 }
                 sb.table(TABLE).insert(payload).execute()
                 n_ins += 1
-            elif choice.startswith("Remplacer"):
+            elif choice in ["Tout remplacer", "Remplacer (écraser la DB)"]:
                 payload = {
                     "user_id": user["id"],
                     "date": row["date"],
@@ -264,7 +286,7 @@ def process_import(df_common, source_label):
                 }
                 sb.table(TABLE).update(payload).eq("id", similar["id"]).execute()
                 n_rep += 1
-            elif choice.startswith("Combiner"):
+            elif choice in ["Tout combiner", "Combiner (compléter l'existant)"]:
                 merged = combine_rows(similar, row)
                 payload = {
                     "user_id": user["id"],
@@ -276,8 +298,15 @@ def process_import(df_common, source_label):
                 }
                 sb.table(TABLE).update(payload).eq("id", similar["id"]).execute()
                 n_comb += 1
+            elif choice == "Ignorer":
+                n_skip += 1
+            else:
+                # Cas '— (aucune action globale)' ne devrait pas arriver ici
+                n_skip += 1
 
         st.success(f"Import terminé : {n_ins} inséré(s), {n_rep} remplacé(s), {n_comb} combiné(s), {n_skip} ignoré(s).")
+    elif not has_anything:
+        st.caption("Aucune ligne à traiter pour le moment.")
 
 # ===== UI : Garmin / Strava =====
 tab_garmin, tab_strava = st.tabs(["🟧 Garmin", "🟥 Strava"])
@@ -294,7 +323,7 @@ with tab_garmin:
         process_import(df_common, "Garmin")
 
 with tab_strava:
-    st.subheader("Importer depuis Strava (CSV global `activities.csv`)")
+    st.subheader("Importer depuis Strava (CSV global `activities.csv`) — KM only")
     strava_file = st.file_uploader("Déposez le CSV Strava", type=["csv"], key="strava_csv")
     if strava_file is not None:
         try:

@@ -16,6 +16,7 @@ from datetime import date
 from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
+import requests  # ← on utilise l’API REST OpenAI (pas de SDK)
 
 # =========================
 # PAGE
@@ -32,7 +33,6 @@ if not user:
 # Clé OpenAI : chargement + vérifs hors-ligne
 # =========================
 def _detect_key_source() -> str:
-    # Priorité à st.secrets, puis variables d'environnement
     if "OPENAI_API_KEY" in st.secrets and st.secrets.get("OPENAI_API_KEY"):
         return "st.secrets"
     if os.getenv("OPENAI_API_KEY"):
@@ -40,32 +40,12 @@ def _detect_key_source() -> str:
     return "absent"
 
 def _validate_key_format(k: str) -> Dict[str, Any]:
-    """
-    Vérifications purement locales (aucun appel réseau) :
-    - présence
-    - prefix attendu (ex: 'sk-' ou 'oa-') — OpenAI utilise plusieurs préfixes
-    - longueur minimale
-    - caractères autorisés
-    NB : ça ne prouve PAS que la clé est valide côté OpenAI, seulement qu'elle 'a l'air' correcte.
-    """
     if not k:
         return {"present": False, "prefix_ok": False, "length_ok": False, "charset_ok": False}
-
-    # Préfixes connus (évolutifs). On reste souple :
     prefix_ok = bool(re.match(r"^(sk|oa|opai|sess)-", k))
-
-    # Longueur arbitrairement raisonnable (clés ~40-80+ chars)
     length_ok = len(k) >= 30
-
-    # Caractères alphanum + - _ ~ (on reste permissif)
     charset_ok = bool(re.match(r"^[A-Za-z0-9\-\_\~]+$", k))
-
-    return {
-        "present": True,
-        "prefix_ok": prefix_ok,
-        "length_ok": length_ok,
-        "charset_ok": charset_ok,
-    }
+    return {"present": True, "prefix_ok": prefix_ok, "length_ok": length_ok, "charset_ok": charset_ok}
 
 OPENAI_API_KEY = st.secrets.get("OPENAI_API_KEY", os.getenv("OPENAI_API_KEY", ""))
 key_source = _detect_key_source()
@@ -81,7 +61,7 @@ with st.expander("🔐 État de la clé OpenAI (aucun appel réseau)"):
         st.write("- Longueur raisonnable (≥30) :", "✅" if key_checks["length_ok"] else "⚠️")
         st.write("- Caractères autorisés :", "✅" if key_checks["charset_ok"] else "⚠️")
         if not all([key_checks["prefix_ok"], key_checks["length_ok"], key_checks["charset_ok"]]):
-            st.info("Ces vérifications sont locales. Pour confirmer réellement la validité côté OpenAI, utilise le test ci-dessous.")
+            st.info("Ces vérifications sont locales. Pour confirmer la validité côté OpenAI, utilise le test ci-dessous.")
 
 # =========================
 # Helpers
@@ -104,17 +84,14 @@ def load_table_df() -> pd.DataFrame:
     df = pd.DataFrame(res.data or [])
     if df.empty:
         return df
-    # snake_case safe
     rename = {c: snake(c) for c in df.columns}
     df = df.rename(columns=rename)
-    # cast datetime
     for c in df.columns:
         if any(k in c for k in ["date","time","start","end","_at","_ts"]):
             try:
                 df[c] = pd.to_datetime(df[c], errors="coerce", utc=True)
             except Exception:
                 pass
-    # enrichir iso/week/mois/jour
     time_cols = [c for c in df.columns if pd.api.types.is_datetime64_any_dtype(df[c])]
     if time_cols:
         t = time_cols[0]
@@ -130,7 +107,6 @@ if df.empty:
     st.markdown("Je n’ai trouvé aucune activité dans ta table `strava_import` pour cet utilisateur.")
     st.stop()
 
-# Colonnes numériques
 NUMERIC_COLS = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])]
 
 # =========================
@@ -186,7 +162,7 @@ def resolve_column(col: Optional[str]) -> Optional[str]:
     return NUMERIC_COLS[0] if NUMERIC_COLS else (df.columns[0] if len(df.columns) else None)
 
 # =========================
-# Filtres + agrégations (core calcul)
+# Filtres + agrégations
 # =========================
 def apply_filters(dd: pd.DataFrame, plan: Dict[str, Any]) -> Tuple[pd.DataFrame, Optional[str]]:
     out = dd.copy()
@@ -210,7 +186,7 @@ def apply_filters(dd: pd.DataFrame, plan: Dict[str, Any]) -> Tuple[pd.DataFrame,
 
     for cond in F.get("where", []) or []:
         col, op, val = cond.get("column"), cond.get("op"), cond.get("value")
-        if not col or col not in out.columns: 
+        if not col or col not in out.columns:
             continue
         s = out[col]
         if pd.api.types.is_numeric_dtype(s):
@@ -267,7 +243,7 @@ def aggregate(dd: pd.DataFrame, plan: Dict[str, Any], key: Optional[str]) -> Tup
         return pd.DataFrame({"metric":[f"{op}_{col}"], "value":[val]}), "metric", "value"
 
 # =========================
-# Mémoire légère de conversation (filtres implicites)
+# Mémoire légère (filtres implicites)
 # =========================
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
@@ -281,24 +257,51 @@ txt = st.text_input("Pose ta question :", placeholder="Ex: d+ moyen par semaine 
 go = st.button("Envoyer")
 
 if not (txt and go):
+    # Petit test en ligne (optionnel) dans ce cas-ci aussi
+    with st.expander("🧪 Test réel de l'API (optionnel)"):
+        st.caption("Appel minimal pour confirmer la clé côté OpenAI (aucun SDK requis).")
+        if st.button("▶️ Lancer un mini-appel API"):
+            if not OPENAI_API_KEY:
+                st.error("Aucune clé détectée.")
+            else:
+                try:
+                    r = requests.post(
+                        "https://api.openai.com/v1/chat/completions",
+                        headers={
+                            "Authorization": f"Bearer {OPENAI_API_KEY}",
+                            "Content-Type": "application/json",
+                        },
+                        json={
+                            "model": "gpt-4o-mini",
+                            "messages": [{"role": "user", "content": "Réponds UNIQUEMENT: OK"}],
+                            "max_tokens": 2,
+                            "temperature": 0
+                        },
+                        timeout=20,
+                    )
+                    if r.status_code == 200:
+                        content = (r.json()["choices"][0]["message"]["content"] or "").strip()
+                        st.success(f"Réponse API: {content!r}  → ✅ clé opérationnelle")
+                    else:
+                        st.error(f"Erreur API ({r.status_code}) → {r.text[:400]}")
+                except Exception as e:
+                    st.error(f"Échec de l'appel API → {e}")
     st.stop()
 
 # =========================
-# Agent avec function calling (ChatCompletions)
+# Agent via API REST OpenAI (function calling)
 # =========================
 def tool_list_columns() -> Dict[str, Any]:
     return {"columns": [{"name": c, "type": dtype_str(df[c])} for c in df.columns]}
 
 def tool_aggregate_dataframe(filters: Optional[Dict[str, Any]], group_by: str, op: str, column: str) -> Dict[str, Any]:
-    # Fusionne filtres implicites et explicites
     F = {"year": st.session_state.agent_filters.get("year"),
          "month": None, "weeks": None, "where": []}
     if filters:
-        for k,v in filters.items():
+        for k, v in filters.items():
             if v is not None:
                 F[k] = v
 
-    # Si l'utilisateur a déjà dit "run"
     if st.session_state.agent_filters.get("type") and "activity_type" in df.columns:
         F["where"] = (F.get("where") or []) + [{"column":"activity_type","op":"=","value":st.session_state.agent_filters["type"]}]
 
@@ -332,7 +335,7 @@ def tool_aggregate_dataframe(filters: Optional[Dict[str, Any]], group_by: str, o
             "group_by": group_key or "none"
         }
 
-# Mise à jour de la mémoire implicite
+# Mise à jour mémoire implicite
 txt_low = txt.lower()
 if "run" in txt_low or "course" in txt_low:
     st.session_state.agent_filters["type"] = "run"
@@ -342,13 +345,9 @@ m = re.search(r"(20\d{2})", txt_low)
 if m:
     st.session_state.agent_filters["year"] = int(m.group(1))
 
-# Appel LLM
 if not OPENAI_API_KEY:
     st.markdown("Je ne peux pas répondre pour l’instant : clé OpenAI absente.")
     st.stop()
-
-from openai import OpenAI
-client = OpenAI(api_key=OPENAI_API_KEY)
 
 SYSTEM = """
 Tu es un analyste d'entraînement. Tu réponds en français, de façon claire et naturelle.
@@ -408,70 +407,71 @@ messages = [{"role":"system","content": SYSTEM}] + st.session_state.chat_history
     {"role":"user","content": txt}
 ]
 
-resp = client.chat.completions.create(
-    model="gpt-4o-mini",
-    temperature=0.2,
-    messages=messages,
-    tools=tools,
-    tool_choice="auto"
-)
+def _openai_chat(payload: Dict[str, Any]) -> Dict[str, Any]:
+    r = requests.post(
+        "https://api.openai.com/v1/chat/completions",
+        headers={
+            "Authorization": f"Bearer {OPENAI_API_KEY}",
+            "Content-Type": "application/json",
+        },
+        json=payload,
+        timeout=60,
+    )
+    if r.status_code != 200:
+        raise RuntimeError(f"OpenAI API error {r.status_code}: {r.text[:500]}")
+    return r.json()
+
+# 1) Appel initial (avec outils)
+resp = _openai_chat({
+    "model": "gpt-4o-mini",
+    "temperature": 0.2,
+    "messages": messages,
+    "tools": tools,
+    "tool_choice": "auto"
+})
 
 final_text = None
-tool_calls = resp.choices[0].message.tool_calls if resp.choices and resp.choices[0].message and hasattr(resp.choices[0].message, "tool_calls") else None
+first_choice = (resp.get("choices") or [{}])[0]
+assistant_msg = first_choice.get("message") or {}
+tool_calls = assistant_msg.get("tool_calls")
 
-# Si le modèle appelle des outils, on les exécute puis on renvoie la réponse finale
 if tool_calls:
-    messages.append(resp.choices[0].message)
+    # Ajoute le message assistant avec tool_calls
+    messages.append({"role": "assistant", "content": assistant_msg.get("content", ""), "tool_calls": tool_calls})
+
+    # Exécute chaque tool call
     for tc in tool_calls:
-        fn_name = tc.function.name
-        args = json.loads(tc.function.arguments or "{}")
+        fn_name = tc["function"]["name"]
+        args = json.loads(tc["function"].get("arguments") or "{}")
         if fn_name == "list_columns":
             out = tool_list_columns()
         elif fn_name == "aggregate_dataframe":
             out = tool_aggregate_dataframe(**args)
         else:
-            out = {"error":"unknown_tool"}
+            out = {"error": "unknown_tool"}
+
         messages.append({
             "role": "tool",
-            "tool_call_id": tc.id,
+            "tool_call_id": tc["id"],
             "name": fn_name,
             "content": json.dumps(out, ensure_ascii=False)
         })
-    resp2 = client.chat.completions.create(
-        model="gpt-4o-mini",
-        temperature=0.2,
-        messages=messages
-    )
-    final_text = resp2.choices[0].message.content.strip() if resp2.choices else ""
+
+    # 2) Appel de suivi (sans outils) pour la réponse finale
+    resp2 = _openai_chat({
+        "model": "gpt-4o-mini",
+        "temperature": 0.2,
+        "messages": messages
+    })
+    final_text = ((resp2.get("choices") or [{}])[0].get("message") or {}).get("content", "").strip()
 else:
-    final_text = resp.choices[0].message.content.strip() if resp.choices else ""
+    final_text = assistant_msg.get("content", "").strip()
 
 # Mémorisation de l'échange
 st.session_state.chat_history += [
     {"role":"user","content": txt},
     {"role":"assistant","content": final_text}
 ]
-
-# ===== Vérification optionnelle en ligne (facultative) =====
-with st.expander("🧪 Test réel de l'API (optionnel)"):
-    st.caption("Ce test effectue un appel minimal à l'API pour confirmer la validité de la clé côté OpenAI.")
-    if st.button("▶️ Lancer un mini-appel API"):
-        if not (key_checks["present"] and all([key_checks["prefix_ok"], key_checks["length_ok"], key_checks["charset_ok"]])):
-            st.warning("La clé ne passe pas les vérifications locales. Corrige d'abord la clé, puis réessaie.")
-        else:
-            try:
-                from openai import OpenAI
-                client = OpenAI(api_key=OPENAI_API_KEY)
-                r = client.chat.completions.create(
-                    model="gpt-4o-mini",
-                    messages=[{"role": "user", "content": "Réponds UNIQUEMENT: OK"}],
-                    max_tokens=2,
-                    temperature=0
-                )
-                out = (r.choices[0].message.content or "").strip()
-                st.success(f"Réponse API: {out!r}  → ✅ clé opérationnelle")
-            except Exception as e:
-                st.error(f"Échec de l'appel API → {e}")
 
 # =========================
 # Affichage final — PHRASES UNIQUEMENT

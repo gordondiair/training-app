@@ -1,121 +1,147 @@
+# utils.py
 import streamlit as st
 from time import time
 
 # ================================
-# Tes fonctions existantes
+# Outils temps / Excel (tes fonctions)
 # ================================
 def hhmmss_to_seconds(txt: str) -> int:
-    """'HH:MM:SS' -> secondes"""
     h, m, s = [int(x) for x in txt.split(":")]
-    return h*3600 + m*60 + s
+    return h * 3600 + m * 60 + s
 
 def seconds_to_excel_time(seconds: int) -> float:
-    """Convertit des secondes en valeur temps Excel (jours)"""
     return (seconds or 0) / 86400.0
 
 
 # ================================
-# Ajouts pour gestion de session
+# Gestion session / cookies (optionnels)
 # ================================
+COOKIE_NAME = "sb_refresh_token"
 
-# Config cookie (personnalisable via .streamlit/secrets.toml si tu veux)
-COOKIE_NAME   = "sb_refresh_token"
+def _to_bool(v, default=False):
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, str):
+        return v.strip().lower() in {"1", "true", "yes", "on"}
+    if isinstance(v, (int, float)):
+        return bool(v)
+    return default
+
 COOKIE_DAYS   = int(st.secrets.get("COOKIE_DAYS", 14))
-# En prod (HTTPS), mets COOKIE_SECURE=True dans secrets; en local tu peux laisser False
-COOKIE_SECURE = bool(st.secrets.get("COOKIE_SECURE", False))
+COOKIE_SECURE = _to_bool(st.secrets.get("COOKIE_SECURE", False), False)
 
-def set_cookie(value: str, days: int = COOKIE_DAYS):
-    """Pose le cookie contenant le refresh token Supabase."""
-    st.experimental_set_cookie(
-        COOKIE_NAME,
-        value,
-        max_age=days * 24 * 3600,
-        path="/",
-        secure=COOKIE_SECURE,
-        samesite="Lax",
-    )
-
-def del_cookie():
-    """Supprime le cookie de refresh."""
-    st.experimental_delete_cookie(COOKIE_NAME, path="/")
-
-def get_cookie():
-    """Récupère le refresh token stocké en cookie (ou None)."""
-    return st.experimental_get_cookie(COOKIE_NAME)
-
-def restore_session(sb):
-    """
-    À appeler au début de chaque page:
-    - Réapplique une session déjà en mémoire (session_state)
-    - Sinon, tente l’auto-login via le cookie refresh token
-    - Rafraîchit la session si elle expire bientôt
-    """
-    # 1) Réappliquer la session mémoire si dispo
-    ssess = st.session_state.get("sb_session")
-    if ssess:
+def _get_cookie(name: str):
+    # Certaines versions de Streamlit n'ont pas cette API
+    if hasattr(st, "experimental_get_cookie"):
         try:
-            sb.auth.set_session(ssess.access_token, ssess.refresh_token)
+            return st.experimental_get_cookie(name)
+        except Exception:
+            return None
+    return None
+
+def _set_cookie(name: str, value: str, days: int):
+    if hasattr(st, "experimental_set_cookie"):
+        try:
+            st.experimental_set_cookie(
+                name,
+                value,
+                max_age=days * 24 * 3600,
+                path="/",
+                secure=COOKIE_SECURE,
+                samesite="Lax",
+            )
+        except Exception:
+            pass  # on continue sans cookie
+
+def _del_cookie(name: str):
+    if hasattr(st, "experimental_delete_cookie"):
+        try:
+            st.experimental_delete_cookie(name, path="/")
         except Exception:
             pass
 
-    # 2) Sinon, tentative via cookie (refresh token)
-    if not sb.auth.get_user():
-        rt = get_cookie()
+
+def restore_session(sb):
+    """
+    À appeler au début de chaque page.
+    - Réapplique session mémoire si dispo
+    - Sinon tente via cookie (si API dispo)
+    - Rafraîchit la session si elle expire bientôt
+    """
+    # 1) Rejoue une session déjà en mémoire
+    ssess = st.session_state.get("sb_session")
+    if ssess:
+        try:
+            # access_token peut être vide si on se base sur le refresh
+            sb.auth.set_session(getattr(ssess, "access_token", "") or "", getattr(ssess, "refresh_token", "") or "")
+        except Exception:
+            pass
+
+    # 2) Sinon, tentative via cookie (si disponible)
+    try:
+        has_user = bool(sb.auth.get_user())
+    except Exception:
+        has_user = False
+
+    if not has_user:
+        rt = _get_cookie(COOKIE_NAME)
         if rt:
             try:
-                # set_session(access_token, refresh_token) — access peut être vide
-                sb.auth.set_session("", rt)
+                sb.auth.set_session("", rt)      # access vide, refresh présent
                 sb.auth.refresh_session()
                 st.session_state["sb_session"] = sb.auth.get_session()
             except Exception:
-                # Cookie invalide/expiré -> on nettoie
-                del_cookie()
+                _del_cookie(COOKIE_NAME)
 
-    # 3) Entretien: rafraîchir si expiration < 60s
-    sess = sb.auth.get_session()
+    # 3) Entretien: refresh si expiration < 60s
+    try:
+        sess = sb.auth.get_session()
+    except Exception:
+        sess = None
+
     if sess:
         st.session_state["sb_session"] = sess
-        try:
-            exp = int(getattr(sess, "expires_at", 0))
-        except Exception:
-            exp = 0
+        exp = int(getattr(sess, "expires_at", 0) or 0)
         if exp and exp < int(time()) + 60:
             try:
                 sb.auth.refresh_session()
                 st.session_state["sb_session"] = sb.auth.get_session()
             except Exception:
-                # Si le refresh échoue, on évite les boucles
-                del_cookie()
+                _del_cookie(COOKIE_NAME)
+
 
 def require_login(sb, title: str = "Connexion"):
     """
     Bloque la page tant que l’utilisateur n’est pas connecté.
-    - Restaure d’abord la session (mémoire + cookie)
-    - Affiche un petit formulaire de connexion sinon
-    Retourne l’objet user si connecté.
+    Retourne l’objet user s’il est connecté.
     """
     restore_session(sb)
-    user = sb.auth.get_user()
-    if user:
-        return user
+
+    try:
+        gu = sb.auth.get_user()
+    except Exception:
+        gu = None
+
+    if gu and getattr(gu, "user", None):
+        return gu
 
     st.subheader(title)
     with st.form("login", clear_on_submit=False):
-        email = st.text_input("Email")
-        pwd   = st.text_input("Mot de passe", type="password")
+        email    = st.text_input("Email")
+        pwd      = st.text_input("Mot de passe", type="password")
         remember = st.checkbox("Se souvenir de moi", value=True)
-        go = st.form_submit_button("Se connecter")
+        go       = st.form_submit_button("Se connecter")
 
     if go:
         try:
             res = sb.auth.sign_in_with_password({"email": email, "password": pwd})
             st.session_state["sb_session"] = res.session
-            if remember and res.session and res.session.refresh_token:
-                set_cookie(res.session.refresh_token)
+            # Pose le cookie seulement si l’API existe
+            if remember and res.session and getattr(res.session, "refresh_token", None):
+                _set_cookie(COOKIE_NAME, res.session.refresh_token, COOKIE_DAYS)
             st.rerun()
         except Exception:
             st.error("Échec de connexion. Vérifie tes identifiants.")
             st.stop()
 
-    # Tant qu'on n'est pas connecté, on stoppe la suite de la page
     st.stop()

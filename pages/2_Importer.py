@@ -134,6 +134,7 @@ TABLE_COLS = [
 
 SPECIAL_HEADER_MAP = {"type":"type_text","media":"media_text","bike":"bike_text","gear":"gear_text"}
 
+# Types par colonne
 BOOL_COLS  = {"commute","prefer_perceived_exertion","commute_1","from_upload","flagged","with_pet","competition","long_run","for_a_cause"}
 INT_COLS   = {"elapsed_time","activity_id","uphill_time","downhill_time","other_time","power_count","perceived_relative_effort","relative_effort_1","number_of_runs","jump_count","total_cycles","timer_time","max_heart_rate_1","average_heart_rate","total_steps"}
 TIME_COLS  = {"start_time","sunrise_time","sunset_time"}
@@ -143,6 +144,12 @@ FLOAT_COLS = set(TABLE_COLS) - BOOL_COLS - INT_COLS - TIME_COLS - TS_COLS - {
     "activity_gear","filename","weather_condition","bike_text","gear_text","precipitation_type","media_text"
 }
 TEXT_COLS  = set(TABLE_COLS) - (BOOL_COLS | INT_COLS | TIME_COLS | TS_COLS | FLOAT_COLS)
+
+# ⚠️ Distances Strava en mètres -> à convertir en km
+DIST_M_COLS = {
+    "distance", "distance_1", "grade_adjusted_distance",
+    "dirt_distance", "newly_explored_distance", "newly_explored_dirt_distance"
+}
 
 def _text_conv(x):
     if x is None or (isinstance(x, float) and pd.isna(x)) or str(x).strip()=="":
@@ -157,7 +164,7 @@ for c in TIME_COLS:  CONVERTER_BY_COL[c] = _to_time
 for c in TS_COLS:    CONVERTER_BY_COL[c] = _to_timestamptz
 for c in TEXT_COLS:  CONVERTER_BY_COL[c] = _text_conv
 
-# Doublons: tolérances
+# Doublons: tolérances (sur km)
 D_TOL_KM, DPLUS_TOL, DMOINS_TOL = 0.2, 50.0, 50.0
 
 # =========================
@@ -182,35 +189,28 @@ if "import_decisions" not in st.session_state:
     st.session_state.import_decisions = {}
 
 # =========================
-# Normalisation JSON — UNIVERSAL GUARD
+# Normalisation JSON — Garde-fou universel
 # =========================
 def _json_safe_row(row: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Dernier filet universel :
-      - NaN/NaT -> None
-      - str numérique -> nombre (int si entier)
-      - tout float entier -> int (peu importe la colonne)
-      - inf -> None
-      - timestamps -> ISO
+    - NaN/NaT -> None
+    - str numérique -> nombre (int si entier)
+    - float entier -> int
+    - inf -> None
+    - timestamps -> ISO
     """
     safe: Dict[str, Any] = {}
     for k, v in row.items():
-        # NaN/NaT
         try:
-            if pd.isna(v):
-                v = None
+            if pd.isna(v): v = None
         except Exception:
             pass
-        # str numérique -> nombre
         if isinstance(v, str) and _looks_numeric_str(v):
             v = _coerce_numeric_str_any(v)
-        # float entier -> int (UNIVERSEL)
         if isinstance(v, float) and math.isfinite(v) and float(v).is_integer():
             v = int(v)
-        # inf -> None
         if isinstance(v, float) and not math.isfinite(v):
             v = None
-        # timestamp -> ISO
         if isinstance(v, (pd.Timestamp, datetime)):
             v = v.isoformat()
         safe[k] = v
@@ -297,7 +297,12 @@ if up:
         if conv:
             df[c] = df[c].map(conv)
 
-    # -- Chaînes numériques -> nombres (universel sur DF)
+    # -- Distances m -> km (sur les colonnes identifiées)
+    for c in DIST_M_COLS:
+        if c in df.columns:
+            df[c] = df[c].map(lambda v: (v / 1000.0) if isinstance(v, (int, float)) and v is not None else (v / 1000.0 if (isinstance(v, float) and pd.notna(v)) else None))
+
+    # -- Chaînes numériques -> nombres (universel)
     for c in df.columns:
         df[c] = df[c].map(_coerce_numeric_str_any)
 
@@ -326,7 +331,7 @@ if up:
         d = _date_only(r.get("activity_date"))
         by_day.setdefault(d, []).append(r)
 
-    # -- Détection doublons
+    # -- Détection doublons (sur km + D+/D- en m)
     rows_to_show = []
     duplicate_found = False
     for _, row in df.iterrows():

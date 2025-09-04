@@ -404,5 +404,27 @@ st.session_state.chat_history += [
 # =========================
 st.markdown(final_text)
 
-st.write("Clé OpenAI chargée :", bool(OPENAI_API_KEY))
+# ===== DEBUG OpenAI — à SUPPRIMER après test =====
+with st.expander("🔧 Diagnostic OpenAI (temporaire)"):
+    st.write("Clé trouvée dans st.secrets :", bool(OPENAI_API_KEY))
+    if OPENAI_API_KEY:
+        # Affiche juste le début de la clé (masqué)
+        st.write("Préfixe de la clé :", (OPENAI_API_KEY[:4] + "…") if len(OPENAI_API_KEY) >= 4 else "…")
+
+    if st.button("▶️ Tester un mini-appel API"):
+        try:
+            from openai import OpenAI
+            client = OpenAI(api_key=OPENAI_API_KEY)
+            r = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[{"role": "user", "content": "Réponds UNIQUEMENT: OK"}],
+                max_tokens=2,
+                temperature=0
+            )
+            out = (r.choices[0].message.content or "").strip()
+            st.success(f"Réponse API: {out!r}")
+        except Exception as e:
+            st.error(f"Échec de l'appel API → {e}")
+# ===== FIN DEBUG =====
+
 

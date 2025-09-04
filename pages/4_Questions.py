@@ -403,3 +403,6 @@ st.session_state.chat_history += [
 # Affichage final — PHRASES UNIQUEMENT
 # =========================
 st.markdown(final_text)
+
+st.write("Clé OpenAI chargée :", bool(OPENAI_API_KEY))
+

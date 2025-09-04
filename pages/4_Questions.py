@@ -13,19 +13,20 @@ from datetime import date
 from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
-import plotly.express as px
 
-st.title("🤖 Questions (langage courant) — `strava_import`")
-
+# =========================
+# PAGE
+# =========================
+st.title("🤖 Questions (réponse en phrases) — strava_import")
 sidebar_logout_bottom(sb)
 
 user = st.session_state.get("user")
 if not user:
     st.stop()
 
-# =========================================
-# 1) Charger 100% des colonnes de la table
-# =========================================
+# =========================
+# Chargement: toute la table (toutes colonnes)
+# =========================
 TABLE = "strava_import"
 
 def snake(s: str) -> str:
@@ -43,17 +44,14 @@ def load_table_df() -> pd.DataFrame:
     res = q.execute()
     df = pd.DataFrame(res.data or [])
     if df.empty: return df
-    # snake_case gentil
     rename = {c: snake(c) for c in df.columns}
     df = df.rename(columns=rename)
-    # cast datetime où pertinent
+    # cast datetime
     for c in df.columns:
         if any(k in c for k in ["date","time","start","end","_at","_ts"]):
-            try:
-                df[c] = pd.to_datetime(df[c], errors="coerce", utc=True)
-            except Exception:
-                pass
-    # enrichir iso_week / iso_year / month / date_only si on a une datetime
+            try: df[c] = pd.to_datetime(df[c], errors="coerce", utc=True)
+            except Exception: pass
+    # enrichir iso/week/mois/jour
     time_cols = [c for c in df.columns if pd.api.types.is_datetime64_any_dtype(df[c])]
     if time_cols:
         t = time_cols[0]
@@ -66,184 +64,103 @@ def load_table_df() -> pd.DataFrame:
 
 df = load_table_df()
 if df.empty:
-    st.info("Pas de données visibles dans `strava_import` pour cet utilisateur.")
+    st.write("Je n’ai trouvé aucune activité dans ta table pour cet utilisateur.")
     st.stop()
 
 schema_detected = [{"name": c, "type": dtype_str(df[c])} for c in df.columns]
 NUMERIC_COLS = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])]
 
-# =========================================
-# 2) Dictionnaire d'ALIAS (énormément de synonymes FR)
-#    -> on filtre pour ne garder que les colonnes qui existent VRAIMENT
-# =========================================
+# =========================
+# Synonymes FR massifs -> colonnes existantes
+# =========================
 RAW_ALIASES: Dict[str, List[str]] = {
-    # Distance
-    "distance": [
-        "distance", "km", "kilometres", "kilomètres", "kilométrage", "kilo", "kms", "km total",
-        "distance totale", "tot km", "total km", "metrage", "parcours total"
-    ],
-    # Temps
-    "moving_time": [
-        "moving_time", "temps en mouvement", "temps de déplacement", "temps actif",
-        "temps couru", "temps roulant", "temps bougé"
-    ],
-    "elapsed_time": [
-        "elapsed_time", "temps total", "durée totale", "durée", "temps écoulé", "temps complet"
-    ],
-    # Vitesse/Allure
-    "average_speed": [
-        "average_speed", "vitesse moyenne", "vitesse", "kmh", "km/h", "moyenne kmh", "vitesse en kmh",
-        "allure moyenne (vitesse)", "allure (vitesse)"
-    ],
+    "distance": ["distance", "km", "kilometres", "kilomètres", "kilométrage", "kms", "total km", "distance totale"],
+    "moving_time": ["moving_time", "temps en mouvement", "temps actif", "temps roulant"],
+    "elapsed_time": ["elapsed_time", "temps total", "durée totale", "durée", "temps écoulé"],
+    "average_speed": ["average_speed", "vitesse moyenne", "vitesse", "kmh", "km/h", "moyenne kmh"],
     "max_speed": ["max_speed", "vitesse maximale", "vitesse max", "pointe de vitesse"],
-    # Fréquence cardiaque
-    "average_heart_rate": [
-        "average_heart_rate", "fc moyenne", "fréquence cardiaque moyenne", "bpm moyen",
-        "pouls moyen", "fcmoy", "heart rate avg"
-    ],
-    "max_heart_rate": [
-        "max_heart_rate", "fc max", "fréquence cardiaque max", "bpm max", "pouls max", "hr max"
-    ],
-    # Dénivelé
-    "elevation_gain": [
-        "elevation_gain", "d+", "denivele positif", "dénivelé positif", "gain altitude",
-        "montée", "cumule d+", "elev gain", "dplus"
-    ],
-    "elevation_loss": [
-        "elevation_loss", "d-", "denivele negatif", "dénivelé négatif", "perte altitude",
-        "descente", "cumule d-", "elev loss", "dmoins"
-    ],
-    "elevation_low": ["elevation_low", "altitude min", "altitude minimale", "alt min", "alt basse"],
-    "elevation_high": ["elevation_high", "altitude max", "altitude maximale", "alt max", "alt haute"],
-    # Pente
+    "average_heart_rate": ["average_heart_rate", "fc moyenne", "fréquence cardiaque moyenne", "bpm moyen", "pouls moyen"],
+    "max_heart_rate": ["max_heart_rate", "fc max", "fréquence cardiaque max", "bpm max", "pouls max"],
+    "elevation_gain": ["elevation_gain", "d+", "denivele positif", "dénivelé positif", "gain altitude", "montée", "dplus"],
+    "elevation_loss": ["elevation_loss", "d-", "denivele negatif", "dénivelé négatif", "perte altitude", "descente", "dmoins"],
+    "elevation_low": ["elevation_low", "altitude min", "alt min", "altitude minimale"],
+    "elevation_high": ["elevation_high", "altitude max", "alt max", "altitude maximale"],
     "max_grade": ["max_grade", "pente max", "pente maximale", "pourcentage max"],
     "average_grade": ["average_grade", "pente moyenne", "pourcentage moyen"],
-    # Effort / calories
-    "relative_effort": ["relative_effort", "effort relatif", "effort", "ressenti effort", "rpe"],
-    "calories": ["calories", "kcal", "cal", "dépense calorique", "calorie"],
-    # Poids / matos
+    "relative_effort": ["relative_effort", "effort relatif", "effort", "rpe"],
+    "calories": ["calories", "kcal", "cal", "dépense calorique"],
     "athlete_weight": ["athlete_weight", "poids athlète", "poids corps", "poids"],
-    "bike_weight": ["bike_weight", "poids vélo", "poids du vélo"],
-    # Type / méta
-    "activity_type": ["activity_type", "type", "sport", "discipline", "activité", "mode"],
+    "bike_weight": ["bike_weight", "poids vélo"],
+    "activity_type": ["activity_type", "type", "sport", "discipline", "activité"],
     "activity_name": ["activity_name", "nom activité", "titre activité", "nom"],
     "activity_description": ["activity_description", "description", "note", "commentaire"],
     "activity_date": ["activity_date", "date", "jour", "date activité"],
     "filename": ["filename", "fichier", "nom de fichier"],
-    "commute": ["commute", "trajet domicile travail", "vélotaf", "déplacement utilitaire"],
-    # Vitesses/rythmes alternatifs (si présents)
-    "average_speed_kmh": ["average_speed_kmh", "vitesse moyenne kmh", "kmh moyen"],
-    "avg_pace_min_per_km": [
-        "avg_pace_min_per_km", "allure moyenne", "allure", "min par km", "min/km", "pace"
-    ],
-    # ISO / date dérivées
+    # rythme si dispo
+    "avg_pace_min_per_km": ["avg_pace_min_per_km", "allure moyenne", "allure", "min/km", "min par km"],
+    # clés de regroupement temporel
     "iso_week": ["iso_week", "semaine", "num semaine", "sem"],
     "iso_year": ["iso_year", "année", "an", "year"],
     "month": ["month", "mois"],
-    "date_only": ["date_only", "jour (date)", "jour calendrier", "date simple"]
+    "date_only": ["date_only", "jour (date)", "date simple"]
 }
-
-# Filtrer les alias pour ne conserver que les colonnes existantes
-ALIASES: Dict[str, List[str]] = {
-    col: [syn for syn in syns if (col in df.columns)]
-    for col, syns in RAW_ALIASES.items() if col in df.columns
-}
-
-# Construire un index synonyme -> colonne (regex safe)
+ALIASES: Dict[str, List[str]] = {col: [s for s in syns if col in df.columns]
+                                 for col, syns in RAW_ALIASES.items() if col in df.columns}
 SYN_TO_COL: Dict[str, str] = {}
 for col, syns in ALIASES.items():
     for s in syns:
-        # normalise clé synonyme pour matcher plus tard
         SYN_TO_COL[s.lower()] = col
 
-# =========================================
-# 3) Pré-traitement de la question avec alias
-#    - remplace les synonymes par les noms de colonnes existants
-# =========================================
 def normalize_question_with_aliases(q: str) -> str:
     qn = " " + q.lower() + " "
-    # remplacements prudents par limites de mots
-    # on trie les synonymes par longueur décroissante pour éviter "km" avant "km/h"
     syns_sorted = sorted(SYN_TO_COL.keys(), key=len, reverse=True)
     for syn in syns_sorted:
         pattern = r"(?<![a-z0-9_])" + re.escape(syn) + r"(?![a-z0-9_])"
-        col = SYN_TO_COL[syn]
-        qn = re.sub(pattern, col, qn, flags=re.IGNORECASE)
+        qn = re.sub(pattern, SYN_TO_COL[syn], qn, flags=re.IGNORECASE)
     return qn.strip()
 
-# =========================================
-# 4) UI
-# =========================================
-examples = [
-    "distance totale en 2024",
-    "fc moyenne semaines 10 à 20 en 2025",
-    "d+ moyen par semaine cette année",
-    "vitesse max en août 2025",
-    "nombre d'activités par mois en 2024",
-    "allure moyenne par semaine où type = run en 2025",  # sera mappé vers avg_pace_min_per_km si présent, sinon average_speed
-]
-with st.expander("💡 Exemples (clique pour remplir)"):
-    cols = st.columns(len(examples))
-    for i, ex in enumerate(examples):
-        if cols[i].button(ex, key=f"ex_{i}"):
-            st.session_state["question_txt"] = ex
-
-txt_raw = st.text_input("Pose ta question en FR :", key="question_txt", placeholder="Ex: d+ moyen par semaine cette année")
-run = st.button("Analyser")
-if not (txt_raw and run):
+# =========================
+# UI minimale: juste la question + une réponse texte
+# =========================
+txt_raw = st.text_input("Pose ta question (FR) :", placeholder="Ex: d+ moyen par semaine cette année")
+go = st.button("Envoyer")
+if not (txt_raw and go):
     st.stop()
 
 txt = normalize_question_with_aliases(txt_raw)
 
-# =========================================
-# 5) LLM planificateur (JSON strict) + alias exposés
-# =========================================
+# =========================
+# LLM planificateur (JSON) — puis réponse en PHRASES
+# =========================
 OPENAI_API_KEY = st.secrets.get("OPENAI_API_KEY", os.getenv("OPENAI_API_KEY", ""))
 
-SCHEMA_DOC = {
-    "table": TABLE,
-    "columns": schema_detected,
-    "aliases": [
-        {"column": col, "synonyms": syns} for col, syns in ALIASES.items()
-    ],
-    "notes": [
-        "Les synonymes ci-dessus sont déjà remplacés dans la question avant appel.",
-        "Groupements possibles: week (iso_week), month (month), day (date_only).",
-        "Filtres: year (iso_year), weeks {from,to}, month (1-12), where[] pour conditions libres.",
-        "Si une colonne demandée n’existe pas, privilégie les colonnes les plus proches présentes dans le schéma."
-    ]
-}
-
-SYSTEM_PROMPT = """Tu es un planificateur analytique. 
-Langue: Français. Tu NE renvoies que du JSON VALIDE (sans texte autour).
+SYSTEM_PROMPT = """Tu es un planificateur analytique pour des données d'entraînement.
+Tu renvoies UNIQUEMENT un JSON valide (aucun texte autour).
 
 Format strict:
 {
-  "metric": { "op": "<sum|avg|max|min|count>", "column": "<nom_colonne_exact_ou_count>" },
+  "metric": { "op": "<sum|avg|max|min|count>", "column": "<colonne ou 'count'>" },
   "filters": {
     "year": 2025 | 2024 | null,
     "weeks": { "from": 10, "to": 20 } | null,
     "month": 1..12 | null,
     "where": [
-      { "column": "<col>", "op": "<=|>=|=|contains|=|!=>", "value": "<valeur>" }
+      { "column": "<col>", "op": "<=|>=|=|!=|contains>", "value": "<valeur>" }
     ] | []
   },
   "group_by": "week" | "month" | "day" | "none",
-  "chart": "line" | "bar" | "none",
   "natural_language_goal": "<paraphrase courte>"
 }
 
 Règles:
-- Utilise les colonnes du schéma fourni. Si la question contient déjà un nom de colonne (remplacé via alias), respecte-le.
-- sum/avg/max/min exigent une colonne numérique; sinon bascule sur count.
+- Utilise les colonnes disponibles. sum/avg/max/min sur numériques, sinon count.
 - “semaines X à Y” -> weeks={from:X,to:Y} et group_by="week".
 - “cette année” -> year = année courante.
 - “par mois” -> group_by="month" ; “par jour” -> group_by="day".
-- where[] permet des filtres libres (ex: activity_type = run).
-- chart: "line" si group_by != "none", sinon "bar".
+- where[] pour activity_type = run, etc.
 """
 
-def call_llm_plan(question: str, schema_doc: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+def call_llm_plan(question: str) -> Optional[Dict[str, Any]]:
     if not OPENAI_API_KEY:
         return None
     try:
@@ -254,19 +171,15 @@ def call_llm_plan(question: str, schema_doc: Dict[str, Any]) -> Optional[Dict[st
             temperature=0.0,
             messages=[
                 {"role":"system","content":SYSTEM_PROMPT},
-                {"role":"user","content":json.dumps(schema_doc, ensure_ascii=False)},
+                {"role":"user","content":json.dumps({"table":"strava_import","columns":schema_detected}, ensure_ascii=False)},
                 {"role":"user","content":question}
             ],
         )
         raw = resp.choices[0].message.content.strip()
         return json.loads(raw)
-    except Exception as e:
-        st.warning(f"LLM indisponible ou JSON invalide ({e}). On tente un fallback.")
+    except Exception:
         return None
 
-# =========================================
-# 6) Fallback regex simple (après alias)
-# =========================================
 MONTHS = {
     "janvier":1,"février":2,"fevrier":2,"mars":3,"avril":4,"mai":5,"juin":6,"juillet":7,
     "août":8,"aout":8,"septembre":9,"octobre":10,"novembre":11,"décembre":12,"decembre":12
@@ -275,19 +188,15 @@ MONTHS = {
 def regex_fallback(q: str) -> Dict[str, Any]:
     ql = q.lower()
     op = "avg" if re.search(r"\bmoyenn?e?\b", ql) else ("max" if "max" in ql else ("min" if "min" in ql else ("count" if "nombre" in ql or "compte" in ql else "sum")))
-    # colonne: chercher d'abord match exact sur df après alias
     col = None
     for c in df.columns:
         if re.search(rf"(?<![a-z0-9_]){re.escape(c)}(?![a-z0-9_])", ql):
             col = c; break
     if col is None:
-        # defaults pertinents
-        for pref in ["distance","elevation_gain","average_speed","average_heart_rate","calories","moving_time","elapsed_time","avg_pace_min_per_km"]:
-            if pref in df.columns:
-                col = pref; break
+        for pref in ["distance","elevation_gain","average_speed","average_heart_rate","moving_time","elapsed_time","calories","avg_pace_min_per_km"]:
+            if pref in df.columns: col = pref; break
         if col is None:
             col = NUMERIC_COLS[0] if NUMERIC_COLS else df.columns[0]
-
     weeks = None
     m = re.search(r"semaines?\s+(\d+)\s*[à\-]\s*(\d+)", ql)
     if m: weeks = {"from": int(m.group(1)), "to": int(m.group(2))}
@@ -295,83 +204,58 @@ def regex_fallback(q: str) -> Dict[str, Any]:
     month = None
     if (m3 := re.search(r"(janvier|février|fevrier|mars|avril|mai|juin|juillet|ao[uû]t|septembre|octobre|novembre|décembre|decembre)", ql)):
         month = MONTHS[m3.group(1).replace("û","u")]
-
-    # where: type = run / activity_type = run / etc.
     where = []
-    for c in ["activity_type","activity_name","activity_description","filename","commute"]:
-        if c in df.columns:
-            m4 = re.search(rf"{c}\s*=\s*([a-z0-9_\-]+)", ql)
-            if m4:
-                where.append({"column": c, "op": "=", "value": m4.group(1)})
-
+    if "activity_type" in df.columns:
+        if " type = run" in f" {ql} " or " activity_type = run" in ql:
+            where.append({"column":"activity_type","op":"=","value":"run"})
     group_by = "week" if weeks else ("month" if "par mois" in ql else ("day" if "par jour" in ql else "none"))
-    chart = "line" if group_by!="none" else "bar"
-
     return {
         "metric": {"op": op, "column": col},
         "filters": {"year": year, "weeks": weeks, "month": month, "where": where},
         "group_by": group_by,
-        "chart": chart,
         "natural_language_goal": q
     }
 
-plan = call_llm_plan(txt, SCHEMA_DOC) or regex_fallback(txt)
+plan = call_llm_plan(txt) or regex_fallback(txt)
 
-# Si le LLM renvoie une colonne qui n'existe pas, on utilise les alias pour corriger
-def resolve_plan_column(col: Optional[str]) -> Optional[str]:
-    if not col:
-        return None
-    if col in df.columns:
-        return col
-    # tente un mapping via alias (sur clés exactes)
+# Sécuriser/normaliser la colonne choisie
+def resolve_column(col: Optional[str]) -> Optional[str]:
+    if not col: return None
+    if col in df.columns: return col
     col_lc = col.lower()
-    if col_lc in SYN_TO_COL:
-        mapped = SYN_TO_COL[col_lc]
-        if mapped in df.columns:
-            return mapped
-    # tentative de rapprochement simple snake
+    if col_lc in SYN_TO_COL and SYN_TO_COL[col_lc] in df.columns:
+        return SYN_TO_COL[col_lc]
     col_sn = snake(col_lc)
-    if col_sn in df.columns:
-        return col_sn
-    # dernier recours: première numérique
+    if col_sn in df.columns: return col_sn
     return NUMERIC_COLS[0] if NUMERIC_COLS else (df.columns[0] if len(df.columns) else None)
 
 if "metric" in plan:
-    plan["metric"]["column"] = resolve_plan_column(plan.get("metric", {}).get("column"))
+    plan["metric"]["column"] = resolve_column(plan.get("metric", {}).get("column"))
 
-with st.expander("🧭 Plan interprété (après alias)"):
-    st.json(plan)
-
-# =========================================
-# 7) Exécution (filtres + groupby + agrégats)
-# =========================================
+# =========================
+# Exécution calculs (aucun affichage brut)
+# =========================
 def apply_filters(dd: pd.DataFrame, plan: Dict[str, Any]) -> Tuple[pd.DataFrame, Optional[str]]:
     out = dd.copy()
-    filters = plan.get("filters") or {}
+    F = plan.get("filters") or {}
 
-    # année via iso_year
-    if filters.get("year") is not None and "iso_year" in out.columns:
-        out = out[out["iso_year"] == int(filters["year"])]
+    if F.get("year") is not None and "iso_year" in out.columns:
+        out = out[out["iso_year"] == int(F["year"])]
 
-    # mois via month ou via datetime
-    if filters.get("month") is not None:
+    if F.get("month") is not None:
         if "month" in out.columns:
-            out = out[out["month"] == int(filters["month"])]
+            out = out[out["month"] == int(F["month"])]
         else:
-            time_col = next((c for c in out.columns if pd.api.types.is_datetime64_any_dtype(out[c])), None)
-            if time_col:
-                out = out[out[time_col].dt.month == int(filters["month"])]
+            tcol = next((c for c in out.columns if pd.api.types.is_datetime64_any_dtype(out[c])), None)
+            if tcol: out = out[out[tcol].dt.month == int(F["month"])]
 
-    # semaines via iso_week
-    if (w := filters.get("weeks")) and "iso_week" in out.columns:
+    if (w := F.get("weeks")) and "iso_week" in out.columns:
         out = out[(out["iso_week"] >= int(w["from"])) & (out["iso_week"] <= int(w["to"]))]
 
-    # where libres
-    for cond in filters.get("where", []) or []:
+    for cond in F.get("where", []) or []:
         col, op, val = cond.get("column"), cond.get("op"), cond.get("value")
         if not col or col not in out.columns: continue
         s = out[col]
-        # cast val
         if pd.api.types.is_numeric_dtype(s):
             try: val_cast = float(val)
             except: continue
@@ -382,20 +266,17 @@ def apply_filters(dd: pd.DataFrame, plan: Dict[str, Any]) -> Tuple[pd.DataFrame,
             except: continue
         else:
             val_cast = str(val)
-        # opérateur
         if op == "=": out = out[s == val_cast]
         elif op == "!=": out = out[s != val_cast]
         elif op == ">=" and pd.api.types.is_numeric_dtype(s): out = out[s >= val_cast]
         elif op == "<=" and pd.api.types.is_numeric_dtype(s): out = out[s <= val_cast]
         elif op == "contains": out = out[s.astype(str).str.contains(str(val), case=False, na=False)]
 
-    # clé de groupement potentielle
     gby = plan.get("group_by","none")
-    key = None
     if gby == "week" and "iso_week" in out.columns: key = "iso_week"
     elif gby == "month" and "month" in out.columns: key = "month"
     elif gby == "day" and "date_only" in out.columns: key = "date_only"
-
+    else: key = None
     return out, key
 
 def aggregate(dd: pd.DataFrame, plan: Dict[str, Any], key: Optional[str]) -> Tuple[pd.DataFrame, str, str]:
@@ -403,7 +284,6 @@ def aggregate(dd: pd.DataFrame, plan: Dict[str, Any], key: Optional[str]) -> Tup
     op = (metric.get("op") or "sum").lower()
     col = metric.get("column") or (NUMERIC_COLS[0] if NUMERIC_COLS else dd.columns[0])
 
-    # sécurité sur le type
     needs_num = op in ("sum","avg","max","min")
     if needs_num and (col not in dd.columns or not pd.api.types.is_numeric_dtype(dd[col])):
         op = "count"
@@ -427,42 +307,62 @@ def aggregate(dd: pd.DataFrame, plan: Dict[str, Any], key: Optional[str]) -> Tup
         else: val = dd[col].sum(numeric_only=True)
         return pd.DataFrame({"metric":[f"{op}_{col}"], "value":[val]}), "metric", "value"
 
-# =========================================
-# 8) RUN
-# =========================================
-try:
-    plan_llm = call_llm_plan(txt, SCHEMA_DOC)
-    plan = plan_llm or regex_fallback(txt)
-    # Re-résolution de colonne si besoin (après LLM)
-    if "metric" in plan:
-        plan["metric"]["column"] = resolve_plan_column(plan.get("metric", {}).get("column"))
+df_filt, group_key = apply_filters(df, plan)
+if df_filt.empty:
+    st.write("Aucun enregistrement ne correspond à ta demande après application des filtres.")
+    st.stop()
 
-    with st.expander("🧭 Plan interprété (avec alias)"):
-        st.json(plan)
+result, x, y = aggregate(df_filt, plan, group_key)
 
-    df_filt, group_key = apply_filters(df, plan)
-    if df_filt.empty:
-        st.warning("Aucun enregistrement après filtres.")
-        st.stop()
+# =========================
+# Rédaction de la réponse (phrases seulement)
+# =========================
+def fmt_num(v: Any) -> str:
+    try:
+        if pd.isna(v): return "—"
+        if isinstance(v, (int,)) or float(v).is_integer():
+            return f"{float(v):,.0f}".replace(",", " ").replace("\xa0"," ")
+        return f"{float(v):,.2f}".replace(",", " ").replace("\xa0"," ")
+    except Exception:
+        return str(v)
 
-    result, x, y = aggregate(df_filt, plan, group_key)
-    st.dataframe(result, use_container_width=True)
+def describe_filters(F: Dict[str, Any]) -> str:
+    parts = []
+    if F.get("year") is not None: parts.append(f"année {F['year']}")
+    if F.get("month") is not None: parts.append(f"mois {int(F['month'])}")
+    if F.get("weeks"): parts.append(f"semaines {F['weeks']['from']} à {F['weeks']['to']}")
+    if F.get("where"):
+        wh = []
+        for c in F["where"]:
+            if c.get("column") and c.get("op") and c.get("value") is not None:
+                wh.append(f"{c['column']} {c['op']} {c['value']}")
+        if wh: parts.append("filtre: " + ", ".join(wh))
+    return (" (" + "; ".join(parts) + ")") if parts else ""
 
-    chart_kind = plan.get("chart","none")
-    if chart_kind != "none":
-        title = plan.get("natural_language_goal","Résultat")
-        if x in ("metric","value"):
-            fig = px.bar(result, x=x, y=y, title=title)
-        else:
-            if chart_kind == "line":
-                fig = px.line(result, x=x, y=y, markers=True, title=title)
-            else:
-                fig = px.bar(result, x=x, y=y, title=title)
-        st.plotly_chart(fig, use_container_width=True)
+def verbalize(plan: Dict[str, Any], result: pd.DataFrame, x: str, y: str) -> str:
+    metric = plan.get("metric", {})
+    op = (metric.get("op") or "sum").lower()
+    col = metric.get("column") or "valeur"
+    F = plan.get("filters") or {}
+    gby = plan.get("group_by","none")
 
-    with st.expander("ℹ️ Alias utilisés & schéma"):
-        st.write({"aliases": ALIASES})
-        st.write("Colonnes & types:", schema_detected)
+    if x in ("metric","value"):  # agrégat unique
+        val = result.iloc[0][y]
+        return f"{op} de **{col}**{describe_filters(F)} : {fmt_num(val)}."
+    else:
+        # groupé: on donne un résumé concis + quelques points
+        n = len(result)
+        # ordonner par groupe si possible
+        try:
+            res_sorted = result.sort_values(by=x)
+        except Exception:
+            res_sorted = result
+        head = res_sorted.head(8)
+        pairs = ", ".join([f"{str(row[x])}: {fmt_num(row[y])}" for _, row in head.iterrows()])
+        more = "" if n <= len(head) else f" … et {n - len(head)} autres."
+        label = "par semaine" if gby=="week" else ("par mois" if gby=="month" else "par jour")
+        return f"{op} de **{col}** {label}{describe_filters(F)} — {pairs}{more}"
 
-except Exception as e:
-    st.exception(e)
+# Affichage final: PHRASES UNIQUEMENT
+response_text = verbalize(plan, result, x, y)
+st.markdown(response_text)

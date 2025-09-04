@@ -15,10 +15,9 @@ from utils import sidebar_logout_bottom
 st.set_page_config(page_title="Importer — Strava", layout="wide")
 
 # =========================
-# Helpers
+# Helpers de normalisation
 # =========================
 def _snake(s: str) -> str:
-    """Strava headers -> snake_case sans accents/points/espaces."""
     if s is None:
         return s
     s = unicodedata.normalize("NFKD", s).encode("ascii", "ignore").decode("ascii")
@@ -34,29 +33,31 @@ def _to_bool(x):
     if isinstance(x, bool):
         return x
     s = str(x).strip().lower()
-    if s in ("true", "1", "yes", "y", "vrai", "oui"):
+    if s in ("true","1","yes","y","vrai","oui"):
         return True
-    if s in ("false", "0", "no", "n", "faux", "non"):
+    if s in ("false","0","no","n","faux","non"):
         return False
     return None
 
 def _to_int(x):
+    """Retourne int ou None, accepte '7', '7.0', 7.0, etc."""
     if x is None or (isinstance(x, float) and pd.isna(x)) or str(x).strip() == "":
         return None
     try:
+        # Si chaîne du style "7.0", int(float(...)) => 7
         return int(x)
     except Exception:
         try:
-            return int(float(x))
+            return int(float(str(x).strip()))
         except Exception:
             return None
 
 def _to_float(x):
+    """Retourne float ou None, supprime NaN/Inf."""
     if x is None or (isinstance(x, float) and pd.isna(x)) or str(x).strip() == "":
         return None
     try:
         v = float(x)
-        # JSON ne supporte pas NaN/Inf
         if not math.isfinite(v):
             return None
         return v
@@ -64,7 +65,7 @@ def _to_float(x):
         return None
 
 def _to_time(s):
-    """Renvoie toujours une chaîne HH:MM:SS (JSON-safe) ou None."""
+    """Renvoie 'HH:MM:SS' (JSON-safe) ou None."""
     if s is None or (isinstance(s, float) and pd.isna(s)) or str(s).strip() == "":
         return None
     txt = str(s).strip()
@@ -77,6 +78,7 @@ def _to_time(s):
     return None
 
 def _to_timestamptz(s):
+    """Renvoie ISO 8601 (UTC si pas de tz) ou None."""
     if s is None or (isinstance(s, float) and pd.isna(s)) or str(s).strip() == "":
         return None
     txt = str(s).strip()
@@ -95,32 +97,25 @@ def _to_timestamptz(s):
         return datetime.now(timezone.utc).isoformat()
 
 def _json_safe_value(v):
-    """Convertit toute valeur non JSON (NaN, NaT, Inf, Timestamp, etc.) en valeur sûre."""
-    # None
     if v is None:
         return None
-    # Pandas NA
     try:
         if pd.isna(v):
             return None
     except Exception:
         pass
-    # Floats non finis
     if isinstance(v, float) and not math.isfinite(v):
         return None
-    # Pandas Timestamp -> ISO
-    if isinstance(v, (pd.Timestamp, )):
+    if isinstance(v, (pd.Timestamp, datetime)):
         return v.isoformat()
-    # Datetime -> ISO
-    if isinstance(v, (datetime, )):
-        return v.isoformat()
-    # Tout le reste inchangé
     return v
 
 def _json_safe_row(d: Dict[str, Any]) -> Dict[str, Any]:
     return {k: _json_safe_value(v) for k, v in d.items()}
 
-# Colonnes exactes de la table public.strava_import (hors id/user_id/created_at/updated_at)
+# =========================
+# Schéma de la table
+# =========================
 TABLE_COLS = [
     "activity_id","activity_date","activity_name","activity_type","activity_description",
     "elapsed_time","distance","max_heart_rate","relative_effort","commute","activity_private_note",
@@ -143,7 +138,6 @@ TABLE_COLS = [
     "long_run","for_a_cause","media_text",
 ]
 
-# Mapping en-têtes spéciaux
 SPECIAL_HEADER_MAP = {
     "type": "type_text",
     "media": "media_text",
@@ -155,12 +149,26 @@ BOOL_COLS = {"commute","prefer_perceived_exertion","commute_1","from_upload","fl
 INT_COLS  = {"elapsed_time","activity_id","uphill_time","downhill_time","other_time","power_count","perceived_relative_effort","relative_effort_1","number_of_runs","jump_count","total_cycles","timer_time","max_heart_rate_1","average_heart_rate","total_steps"}
 TIME_COLS = {"start_time","sunrise_time","sunset_time"}
 TS_COLS   = {"activity_date","weather_observation_time"}
-FLOAT_COLS = set(TABLE_COLS) - BOOL_COLS - INT_COLS - TIME_COLS - TS_COLS - {"type_text","activity_name","activity_type","activity_description","activity_private_note","activity_gear","filename","weather_condition","bike_text","gear_text","precipitation_type","media_text"}
+# tout le reste numérique = float
+FLOAT_COLS = set(TABLE_COLS) - BOOL_COLS - INT_COLS - TIME_COLS - TS_COLS - {
+    "type_text","activity_name","activity_type","activity_description","activity_private_note",
+    "activity_gear","filename","weather_condition","bike_text","gear_text","precipitation_type","media_text"
+}
+TEXT_COLS = set(TABLE_COLS) - (BOOL_COLS | INT_COLS | TIME_COLS | TS_COLS | FLOAT_COLS)
+
+# Carte des convertisseurs par colonne
+CONVERTER_BY_COL: Dict[str, Any] = {}
+for c in BOOL_COLS:  CONVERTER_BY_COL[c] = _to_bool
+for c in INT_COLS:   CONVERTER_BY_COL[c] = _to_int
+for c in FLOAT_COLS: CONVERTER_BY_COL[c] = _to_float
+for c in TIME_COLS:  CONVERTER_BY_COL[c] = _to_time
+for c in TS_COLS:    CONVERTER_BY_COL[c] = _to_timestamptz
+for c in TEXT_COLS:  CONVERTER_BY_COL[c] = lambda x: None if (x is None or (isinstance(x, float) and pd.isna(x)) or str(x).strip()=="") else str(x)
 
 # Règles de doublons (km_only + D+ / D- proches)
-D_TOL_KM   = 0.2      # ± 0.2 km
-DPLUS_TOL  = 50.0     # ± 50 m
-DMOINS_TOL = 50.0     # ± 50 m
+D_TOL_KM   = 0.2
+DPLUS_TOL  = 50.0
+DMOINS_TOL = 50.0
 
 # =========================
 # Auth + client
@@ -179,13 +187,12 @@ sidebar_logout_bottom(sb)
 st.markdown("Charge ton fichier **activities.csv** exporté depuis Strava.")
 up = st.file_uploader("Déposer le CSV Strava", type=["csv"], accept_multiple_files=False)
 
-# Espace pour actions globales
 global_action_col, apply_col = st.columns([3,1])
 if "import_decisions" not in st.session_state:
     st.session_state.import_decisions = {}
 
 # =========================
-# Fonctions DB
+# DB
 # =========================
 def fetch_existing_rows(min_dt_iso: str, max_dt_iso: str) -> List[Dict[str, Any]]:
     sel_cols = ["id","user_id","activity_id","activity_date","activity_name","activity_type","distance","elevation_gain","elevation_loss","moving_time"]
@@ -198,18 +205,22 @@ def fetch_existing_rows(min_dt_iso: str, max_dt_iso: str) -> List[Dict[str, Any]
     res = q.execute()
     return res.data or []
 
+def _finalize_payload(row_dict: Dict[str, Any]) -> Dict[str, Any]:
+    """Coerce fort par colonne + JSON-safe."""
+    payload = {}
+    for k in TABLE_COLS:
+        conv = CONVERTER_BY_COL.get(k, lambda x: x)
+        payload[k] = conv(row_dict.get(k, None))
+    payload["user_id"] = user["id"]
+    return _json_safe_row(payload)
+
 def do_upserts(rows_insert: List[Dict[str, Any]], rows_replace: List[Tuple[int, Dict[str, Any]]], rows_combine: List[Tuple[int, Dict[str, Any]]]):
-    # INSERT / UPSERT by unique (user_id, activity_id) when activity_id present
     if rows_insert:
-        safe_rows = [_json_safe_row(r) for r in rows_insert]
-        sb.table("strava_import").upsert(safe_rows, on_conflict="user_id,activity_id").execute()
+        sb.table("strava_import").upsert(rows_insert, on_conflict="user_id,activity_id").execute()
 
-    # REPLACE
     for db_id, payload in rows_replace:
-        safe = _json_safe_row(payload)
-        sb.table("strava_import").update(safe).eq("id", db_id).eq("user_id", user["id"]).execute()
+        sb.table("strava_import").update(payload).eq("id", db_id).eq("user_id", user["id"]).execute()
 
-    # COMBINE
     for db_id, payload in rows_combine:
         curr = sb.table("strava_import").select("*").eq("id", db_id).single().execute().data
         if not curr:
@@ -220,64 +231,39 @@ def do_upserts(rows_insert: List[Dict[str, Any]], rows_replace: List[Tuple[int, 
                 continue
             if k not in TABLE_COLS:
                 continue
-            if (curr.get(k) is None) and (v is not None and v != "" and not (isinstance(v, float) and pd.isna(v))):
+            if (curr.get(k) is None) and (v is not None and v != ""):
                 to_set[k] = v
         if to_set:
             sb.table("strava_import").update(_json_safe_row(to_set)).eq("id", db_id).eq("user_id", user["id"]).execute()
 
 # =========================
-# Parsing + détection doublons
+# Parsing + doublons
 # =========================
 if up:
-    # Lecture CSV
     raw = up.read()
     df = pd.read_csv(io.BytesIO(raw))
 
-    # Normalisation headers
+    # headers
     df.columns = [_snake(c) for c in df.columns]
-
-    # Remap colonnes spéciales
     df = df.rename(columns={k: v for k, v in SPECIAL_HEADER_MAP.items() if k in df.columns})
 
-    # On garde uniquement les colonnes connues + on ajoute celles manquantes en None
+    # aligner colonnes
     for col in TABLE_COLS:
         if col not in df.columns:
             df[col] = None
-    keep = ["activity_id","activity_date","activity_name","activity_type","activity_description",
-            "elapsed_time","distance","max_heart_rate","relative_effort","commute","activity_private_note",
-            "activity_gear","filename","athlete_weight","bike_weight","elapsed_time_1","moving_time","distance_1","max_speed","average_speed",
-            "elevation_gain","elevation_loss","elevation_low","elevation_high","max_grade","average_grade","average_positive_grade","average_negative_grade",
-            "max_cadence","average_cadence","max_heart_rate_1","average_heart_rate","max_watts","average_watts","calories","max_temperature","average_temperature",
-            "relative_effort_1","total_work","number_of_runs","uphill_time","downhill_time","other_time","perceived_exertion","type_text","start_time","weighted_average_power",
-            "power_count","prefer_perceived_exertion","perceived_relative_effort","commute_1","total_weight_lifted","from_upload","grade_adjusted_distance",
-            "weather_observation_time","weather_condition","weather_temperature","apparent_temperature","dewpoint","humidity","weather_pressure","wind_speed","wind_gust",
-            "wind_bearing","precipitation_intensity","sunrise_time","sunset_time","moon_phase","bike_text","gear_text","precipitation_probability","precipitation_type","cloud_cover",
-            "weather_visibility","uv_index","weather_ozone","jump_count","total_grit","average_flow","flagged","average_elapsed_speed","dirt_distance","newly_explored_distance",
-            "newly_explored_dirt_distance","activity_count","total_steps","carbon_saved","pool_length","training_load","intensity","average_grade_adjusted_pace","timer_time","total_cycles",
-            "recovery","with_pet","competition","long_run","for_a_cause","media_text"]
+    keep = TABLE_COLS.copy()
     df = df[keep]
 
-    # Typage Strava -> types DB
-    for c in BOOL_COLS:
-        if c in df.columns:
-            df[c] = df[c].map(_to_bool)
-    for c in INT_COLS:
-        if c in df.columns:
-            df[c] = df[c].map(_to_int)
-    for c in FLOAT_COLS:
-        if c in df.columns:
-            df[c] = df[c].map(_to_float)
-    for c in TIME_COLS:
-        if c in df.columns:
-            df[c] = df[c].map(_to_time)
-    for c in TS_COLS:
-        if c in df.columns:
-            df[c] = df[c].map(_to_timestamptz)
+    # typage au niveau DataFrame (optionnel mais utile pour l'aperçu)
+    for c in df.columns:
+        conv = CONVERTER_BY_COL.get(c)
+        if conv:
+            df[c] = df[c].map(conv)
 
-    # Dernier filet de sécurité: remplacer tout NaN/NaT par None
+    # sécurité NaN -> None
     df = df.where(pd.notna(df), None)
 
-    # Bornes temporelles pour récupérer les potentiels doublons
+    # fenêtre temporelle
     try:
         min_dt = pd.to_datetime(df["activity_date"]).min()
         max_dt = pd.to_datetime(df["activity_date"]).max()
@@ -290,7 +276,6 @@ if up:
 
     existing = fetch_existing_rows(min_dt.isoformat(), max_dt.isoformat())
 
-    # Index existants par jour
     def _date_only(ts):
         try:
             return pd.to_datetime(ts).date()
@@ -302,7 +287,7 @@ if up:
         d = _date_only(r.get("activity_date"))
         by_day.setdefault(d, []).append(r)
 
-    # Détection doublons: même jour + km/d+/d- proches (CSV Strava en km_only)
+    # détection doublons
     rows_to_show = []
     duplicate_found = False
     for idx, row in df.iterrows():
@@ -324,18 +309,15 @@ if up:
 
         rows_to_show.append((idx, row.to_dict(), match))
 
-    # =========================
-    # CAS 1 — Aucun doublon détecté: import silencieux immédiat
-    # =========================
+    # ============ CAS 1 — aucun doublon: import silencieux ============
     if not duplicate_found:
         insert_payloads: List[Dict[str, Any]] = []
-        for (i, new_row, _) in rows_to_show:
-            payload = {k: (None if (k not in new_row or pd.isna(new_row.get(k))) else new_row.get(k)) for k in TABLE_COLS}
-            payload["user_id"] = user["id"]
-            insert_payloads.append(_json_safe_row(payload))
+        for (_, new_row, _) in rows_to_show:
+            payload = _finalize_payload(new_row)
+            insert_payloads.append(payload)
 
         try:
-            do_upserts(insert_payloads, rows_replace=[], rows_combine=[])
+            do_upserts(insert_payloads, [], [])
             st.success(f"Import terminé ✅  | Insérés: {len(insert_payloads)}")
             st.balloons()
             with st.expander("Aperçu (premières lignes importées)", expanded=False):
@@ -343,9 +325,7 @@ if up:
         except Exception as e:
             st.error(f"Erreur pendant l'import : {e}")
 
-    # =========================
-    # CAS 2 — Au moins un doublon: montrer l'UI de décision
-    # =========================
+    # ============ CAS 2 — doublons: UI de décision ============
     else:
         with st.expander("Aperçu rapide du parsing (premières lignes)", expanded=False):
             st.dataframe(df.head(10))
@@ -378,7 +358,7 @@ if up:
             box = st.container(border=True)
             with box:
                 left, right = st.columns([3,2])
-                date_lbl = ""
+
                 try:
                     date_lbl = pd.to_datetime(new_row.get("activity_date")).strftime("%Y-%m-%d %H:%M")
                 except Exception:
@@ -419,9 +399,7 @@ if up:
                 cnp3.write(f"Dist (km): {new_row.get('distance')}")
                 cnp4.write(f"D+ / D-: {new_row.get('elevation_gain')} / {new_row.get('elevation_loss')}")
 
-                payload = {k: (None if (k not in new_row or pd.isna(new_row.get(k))) else new_row.get(k)) for k in TABLE_COLS}
-                payload["user_id"] = user["id"]
-                payload = _json_safe_row(payload)
+                payload = _finalize_payload(new_row)
 
                 if choice == "insert" and not existing_row:
                     insert_payloads.append(payload)

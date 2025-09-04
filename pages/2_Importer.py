@@ -21,7 +21,7 @@ st.set_page_config(page_title="Importer — Strava", layout="wide")
 _NUMERIC_STR_RE = re.compile(r'^[+-]?\d+(\.\d+)?$')
 
 def _looks_numeric_str(s: Any) -> bool:
-    return isinstance(s, str) and _NUMERIC_STR_RE.match(s.strip()) is not None
+    return isinstance(s, str) and _NUMERIC_STR_RE.match(s.strip() or "") is not None
 
 def _coerce_numeric_str_any(s: Any):
     """Si s est '7.0'/'7'/'-3.50', renvoie int ou float. Sinon renvoie s inchangé."""
@@ -31,7 +31,6 @@ def _coerce_numeric_str_any(s: Any):
         f = float(s.strip())
     except Exception:
         return s
-    # 7.0 -> 7
     if math.isfinite(f) and float(f).is_integer():
         return int(f)
     return f if math.isfinite(f) else None
@@ -61,7 +60,6 @@ def _to_bool(x):
 def _to_int(x):
     if x is None or (isinstance(x, float) and pd.isna(x)) or str(x).strip() == "":
         return None
-    # S'il arrive en str "7.0", convertissons proprement
     x = _coerce_numeric_str_any(x)
     try:
         return int(x)
@@ -74,7 +72,6 @@ def _to_int(x):
 def _to_float(x):
     if x is None or (isinstance(x, float) and pd.isna(x)) or str(x).strip() == "":
         return None
-    # Convertir "7.0" -> 7.0
     x = _coerce_numeric_str_any(x)
     try:
         v = float(x)
@@ -114,23 +111,6 @@ def _to_timestamptz(s):
     except Exception:
         return datetime.now(timezone.utc).isoformat()
 
-def _json_safe_value(v):
-    if v is None:
-        return None
-    try:
-        if pd.isna(v):
-            return None
-    except Exception:
-        pass
-    if isinstance(v, float) and not math.isfinite(v):
-        return None
-    if isinstance(v, (pd.Timestamp, datetime)):
-        return v.isoformat()
-    return v
-
-def _json_safe_row(d: Dict[str, Any]) -> Dict[str, Any]:
-    return {k: _json_safe_value(v) for k, v in d.items()}
-
 # =========================
 # Schéma / Types
 # =========================
@@ -156,12 +136,7 @@ TABLE_COLS = [
     "long_run","for_a_cause","media_text",
 ]
 
-SPECIAL_HEADER_MAP = {
-    "type": "type_text",
-    "media": "media_text",
-    "bike": "bike_text",
-    "gear": "gear_text",
-}
+SPECIAL_HEADER_MAP = {"type": "type_text","media": "media_text","bike": "bike_text","gear": "gear_text"}
 
 BOOL_COLS = {"commute","prefer_perceived_exertion","commute_1","from_upload","flagged","with_pet","competition","long_run","for_a_cause"}
 INT_COLS  = {"elapsed_time","activity_id","uphill_time","downhill_time","other_time","power_count","perceived_relative_effort","relative_effort_1","number_of_runs","jump_count","total_cycles","timer_time","max_heart_rate_1","average_heart_rate","total_steps"}
@@ -174,13 +149,18 @@ FLOAT_COLS = set(TABLE_COLS) - BOOL_COLS - INT_COLS - TIME_COLS - TS_COLS - {
 TEXT_COLS = set(TABLE_COLS) - (BOOL_COLS | INT_COLS | TIME_COLS | TS_COLS | FLOAT_COLS)
 
 # Convertisseurs par colonne
+def _text_conv(x):  # text sûr
+    if x is None or (isinstance(x, float) and pd.isna(x)) or str(x).strip()=="":
+        return None
+    return str(x)
+
 CONVERTER_BY_COL: Dict[str, Any] = {}
 for c in BOOL_COLS:  CONVERTER_BY_COL[c] = _to_bool
 for c in INT_COLS:   CONVERTER_BY_COL[c] = _to_int
 for c in FLOAT_COLS: CONVERTER_BY_COL[c] = _to_float
 for c in TIME_COLS:  CONVERTER_BY_COL[c] = _to_time
 for c in TS_COLS:    CONVERTER_BY_COL[c] = _to_timestamptz
-for c in TEXT_COLS:  CONVERTER_BY_COL[c] = lambda x: None if (x is None or (isinstance(x, float) and pd.isna(x)) or str(x).strip()=="") else str(x)
+for c in TEXT_COLS:  CONVERTER_BY_COL[c] = _text_conv
 
 # Tolerances doublons
 D_TOL_KM   = 0.2
@@ -209,6 +189,45 @@ if "import_decisions" not in st.session_state:
     st.session_state.import_decisions = {}
 
 # =========================
+# JSON-safe (col-aware)
+# =========================
+def _json_safe_row(row: Dict[str, Any]) -> Dict[str, Any]:
+    safe: Dict[str, Any] = {}
+    for k, v in row.items():
+        # 1) NaN/NaT -> None
+        try:
+            if pd.isna(v):
+                v = None
+        except Exception:
+            pass
+
+        # 2) Si c'est une chaîne numérique -> nombre
+        if isinstance(v, str) and _looks_numeric_str(v):
+            v = _coerce_numeric_str_any(v)
+
+        # 3) Si la colonne est INT et qu'on a un float entier -> int
+        if k in INT_COLS:
+            if isinstance(v, float) and math.isfinite(v) and float(v).is_integer():
+                v = int(v)
+            # Si c'est encore une chaîne numérique, cast en int
+            if isinstance(v, str) and _looks_numeric_str(v):
+                try:
+                    v = int(float(v))
+                except Exception:
+                    v = None
+
+        # 4) Floats infinis -> None
+        if isinstance(v, float) and not math.isfinite(v):
+            v = None
+
+        # 5) Timestamps -> ISO (au cas où)
+        if isinstance(v, (pd.Timestamp, datetime)):
+            v = v.isoformat()
+
+        safe[k] = v
+    return safe
+
+# =========================
 # DB I/O
 # =========================
 def fetch_existing_rows(min_dt_iso: str, max_dt_iso: str) -> List[Dict[str, Any]]:
@@ -223,40 +242,22 @@ def fetch_existing_rows(min_dt_iso: str, max_dt_iso: str) -> List[Dict[str, Any]
     return res.data or []
 
 def _finalize_payload(row_dict: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    1) Conversion par colonne (bool/int/float/time/ts/text)
-    2) Coercition universelle des chaînes numériques restantes
-    3) Re-forçage INT: si valeur numérique non-entière envoyée en INT -> int(float(...))
-    4) JSON safe
-    """
     payload: Dict[str, Any] = {}
     for k in TABLE_COLS:
         conv = CONVERTER_BY_COL.get(k, lambda x: x)
         v = conv(row_dict.get(k, None))
-
-        # (2) convertir toute chaîne "7.0" restante en nombre
-        v = _coerce_numeric_str_any(v)
-
-        # (3) pour les colonnes INT, si on a encore un float -> cast int
-        if k in INT_COLS:
-            if isinstance(v, float) and math.isfinite(v):
-                v = int(v)
-            elif isinstance(v, str) and _looks_numeric_str(v):
-                try:
-                    v = int(float(v))
-                except Exception:
-                    v = None
-
         payload[k] = v
-
     payload["user_id"] = user["id"]
+    # Passage JSON-safe colonne-aware
     return _json_safe_row(payload)
 
 def do_upserts(rows_insert: List[Dict[str, Any]], rows_replace: List[Tuple[int, Dict[str, Any]]], rows_combine: List[Tuple[int, Dict[str, Any]]]):
     if rows_insert:
-        sb.table("strava_import").upsert(rows_insert, on_conflict="user_id,activity_id").execute()
+        safe_rows = [_json_safe_row(r) for r in rows_insert]
+        sb.table("strava_import").upsert(safe_rows, on_conflict="user_id,activity_id").execute()
     for db_id, payload in rows_replace:
-        sb.table("strava_import").update(payload).eq("id", db_id).eq("user_id", user["id"]).execute()
+        safe = _json_safe_row(payload)
+        sb.table("strava_import").update(safe).eq("id", db_id).eq("user_id", user["id"]).execute()
     for db_id, payload in rows_combine:
         curr = sb.table("strava_import").select("*").eq("id", db_id).single().execute().data
         if not curr:
@@ -289,13 +290,13 @@ if up:
             df[col] = None
     df = df[TABLE_COLS]
 
-    # typage au niveau DF (facultatif)
+    # typage (DataFrame)
     for c in df.columns:
         conv = CONVERTER_BY_COL.get(c)
         if conv:
             df[c] = df[c].map(conv)
 
-    # convertir les chaînes numériques résiduelles (universel)
+    # universal : chaînes numériques -> nombres
     for c in df.columns:
         df[c] = df[c].map(_coerce_numeric_str_any)
 
@@ -362,15 +363,20 @@ if up:
             with st.expander("Aperçu (premières lignes importées)", expanded=False):
                 st.dataframe(pd.DataFrame(insert_payloads).head(10))
         except Exception as e:
-            # mini diagnostic utile
             st.error(f"Erreur pendant l'import : {e}")
-            with st.expander("Diagnostic rapide"):
-                bad_cols = []
-                for k in TABLE_COLS:
-                    # Cherche des valeurs texte numériques restantes
-                    if any(_looks_numeric_str(x) for x in pd.Series([r.get(k) for _, r, _ in rows_to_show])):
-                        bad_cols.append(k)
-                st.write("Colonnes contenant encore des *chaînes* numériques potentielles :", bad_cols)
+            with st.expander("Diagnostic détaillé"):
+                st.write("Recherche de valeurs à risque (chaînes numériques / floats entiers sur colonnes INT) :")
+                probs = []
+                for r in insert_payloads:
+                    row_probs = []
+                    for k, v in r.items():
+                        if isinstance(v, str) and _looks_numeric_str(v):
+                            row_probs.append((k, type(v).__name__, v))
+                        if (k in INT_COLS) and isinstance(v, float) and math.isfinite(v) and float(v).is_integer():
+                            row_probs.append((k, type(v).__name__, v))
+                    if row_probs:
+                        probs.append(row_probs)
+                st.write(probs)
 
     # ===== Doublons -> UI décisions =====
     else:
@@ -399,7 +405,7 @@ if up:
 
         insert_payloads: List[Dict[str, Any]] = []
         replace_payloads: List[Tuple[int, Dict[str, Any]]] = []
-        combine_payloads: List[Tuple[int, Dict[str, Any]] ] = []
+        combine_payloads: List[Tuple[int, Dict[str, Any]]] = []
 
         for (i, new_row, existing_row) in rows_to_show:
             box = st.container(border=True)
@@ -468,6 +474,19 @@ if up:
                     st.balloons()
                 except Exception as e:
                     st.error(f"Erreur pendant l'import : {e}")
+                    with st.expander("Diagnostic détaillé"):
+                        st.write("Insert payloads — valeurs à risque :")
+                        probs = []
+                        for r in insert_payloads:
+                            row_probs = []
+                            for k, v in r.items():
+                                if isinstance(v, str) and _looks_numeric_str(v):
+                                    row_probs.append((k, type(v).__name__, v))
+                                if (k in INT_COLS) and isinstance(v, float) and math.isfinite(v) and float(v).is_integer():
+                                    row_probs.append((k, type(v).__name__, v))
+                            if row_probs:
+                                probs.append(row_probs)
+                        st.write(probs)
 
 else:
     st.info("Dépose un fichier CSV Strava pour commencer.")

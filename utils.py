@@ -3,7 +3,7 @@ import streamlit as st
 from time import time
 
 # ================================
-# Outils temps / Excel (tes fonctions)
+# Outils temps / Excel
 # ================================
 def hhmmss_to_seconds(txt: str) -> int:
     h, m, s = [int(x) for x in txt.split(":")]
@@ -31,7 +31,6 @@ COOKIE_DAYS   = int(st.secrets.get("COOKIE_DAYS", 14))
 COOKIE_SECURE = _to_bool(st.secrets.get("COOKIE_SECURE", False), False)
 
 def _get_cookie(name: str):
-    # Certaines versions de Streamlit n'ont pas cette API
     if hasattr(st, "experimental_get_cookie"):
         try:
             return st.experimental_get_cookie(name)
@@ -51,7 +50,7 @@ def _set_cookie(name: str, value: str, days: int):
                 samesite="Lax",
             )
         except Exception:
-            pass  # on continue sans cookie
+            pass
 
 def _del_cookie(name: str):
     if hasattr(st, "experimental_delete_cookie"):
@@ -62,22 +61,17 @@ def _del_cookie(name: str):
 
 
 def restore_session(sb):
-    """
-    À appeler au début de chaque page.
-    - Réapplique session mémoire si dispo
-    - Sinon tente via cookie (si API dispo)
-    - Rafraîchit la session si elle expire bientôt
-    """
-    # 1) Rejoue une session déjà en mémoire
+    """Réapplique la session si dispo en mémoire ou cookie."""
     ssess = st.session_state.get("sb_session")
     if ssess:
         try:
-            # access_token peut être vide si on se base sur le refresh
-            sb.auth.set_session(getattr(ssess, "access_token", "") or "", getattr(ssess, "refresh_token", "") or "")
+            sb.auth.set_session(
+                getattr(ssess, "access_token", "") or "",
+                getattr(ssess, "refresh_token", "") or "",
+            )
         except Exception:
             pass
 
-    # 2) Sinon, tentative via cookie (si disponible)
     try:
         has_user = bool(sb.auth.get_user())
     except Exception:
@@ -87,13 +81,12 @@ def restore_session(sb):
         rt = _get_cookie(COOKIE_NAME)
         if rt:
             try:
-                sb.auth.set_session("", rt)      # access vide, refresh présent
+                sb.auth.set_session("", rt)
                 sb.auth.refresh_session()
                 st.session_state["sb_session"] = sb.auth.get_session()
             except Exception:
                 _del_cookie(COOKIE_NAME)
 
-    # 3) Entretien: refresh si expiration < 60s
     try:
         sess = sb.auth.get_session()
     except Exception:
@@ -111,10 +104,7 @@ def restore_session(sb):
 
 
 def require_login(sb, title: str = "Connexion"):
-    """
-    Bloque la page tant que l’utilisateur n’est pas connecté.
-    Retourne l’objet user s’il est connecté.
-    """
+    """Bloque la page tant que l’utilisateur n’est pas connecté."""
     restore_session(sb)
 
     try:
@@ -136,7 +126,6 @@ def require_login(sb, title: str = "Connexion"):
         try:
             res = sb.auth.sign_in_with_password({"email": email, "password": pwd})
             st.session_state["sb_session"] = res.session
-            # Pose le cookie seulement si l’API existe
             if remember and res.session and getattr(res.session, "refresh_token", None):
                 _set_cookie(COOKIE_NAME, res.session.refresh_token, COOKIE_DAYS)
             st.rerun()
@@ -145,3 +134,17 @@ def require_login(sb, title: str = "Connexion"):
             st.stop()
 
     st.stop()
+
+
+def logout(sb):
+    """Déconnexion propre : Supabase + mémoire + cookie (si dispo)."""
+    try:
+        sb.auth.sign_out()
+    except Exception:
+        pass
+    st.session_state.pop("sb_session", None)
+    st.session_state["user"] = None
+    try:
+        _del_cookie(COOKIE_NAME)
+    except Exception:
+        pass

@@ -399,11 +399,6 @@ st.session_state.chat_history += [
     {"role":"assistant","content": final_text}
 ]
 
-# =========================
-# Affichage final — PHRASES UNIQUEMENT
-# =========================
-st.markdown(final_text)
-
 # ===== DEBUG OpenAI — à SUPPRIMER après test =====
 with st.expander("🔧 Diagnostic OpenAI (temporaire)"):
     st.write("Clé trouvée dans st.secrets :", bool(OPENAI_API_KEY))
@@ -426,5 +421,12 @@ with st.expander("🔧 Diagnostic OpenAI (temporaire)"):
         except Exception as e:
             st.error(f"Échec de l'appel API → {e}")
 # ===== FIN DEBUG =====
+
+
+# =========================
+# Affichage final — PHRASES UNIQUEMENT
+# =========================
+st.markdown(final_text)
+
 
 

@@ -15,6 +15,8 @@ import plotly.express as px
 
 st.title("🤖 Questions (MVP)")
 
+sidebar_logout_bottom(sb)
+
 user = st.session_state.get("user")
 if not user: st.stop()
 
@@ -28,5 +30,3 @@ if df.empty:
     st.stop()
 
 # ... reste inchangé (regex, métrique choisie, plotly)
-
-sidebar_logout_bottom(sb)

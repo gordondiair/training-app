@@ -150,52 +150,36 @@ def logout(sb):
         pass
 
 def sidebar_logout_bottom(sb, label: str = "Se déconnecter"):
-    """Bouton de déconnexion FIXE tout en bas du sidebar, quelle que soit la page."""
+    """
+    Place un bouton de déconnexion tout en bas de la barre latérale,
+    de façon fiable (flex + spacer).
+    """
     # Injecter le CSS une seule fois
-    if not st.session_state.get("_sidebar_footer_css_v2", False):
+    if not st.session_state.get("_sidebar_footer_css_flex", False):
         st.markdown(
             """
             <style>
-            /* Rendre le conteneur du sidebar positionnable */
-            section[data-testid="stSidebar"] { position: relative; }
-
-            /* Bouton fixé en bas du sidebar */
-            section[data-testid="stSidebar"] .sidebar-bottom {
-                position: fixed;
-                bottom: 12px;
-                left: 12px;               /* marge intérieure par défaut */
-                width: calc(18rem - 24px);/* largeur sidebar ~ 18rem - marges */
-                z-index: 1000;
+            /* Sur les versions récentes, le contenu est sous data-testid="stSidebarContent" */
+            section[data-testid="stSidebar"] div[data-testid="stSidebarContent"] {
+                display: flex;
+                flex-direction: column;
+                height: 100%;
             }
-
-            /* Largeurs adaptatives selon thèmes/tailles */
-            @media (max-width: 991px) {
-              /* Sidebar en mode overlay sur petits écrans */
-              section[data-testid="stSidebar"] .sidebar-bottom {
-                  left: 16px;
-                  width: calc(100vw - 32px);
-              }
-            }
-
-            /* Fallback: si la largeur diffère, on tente via variable CSS (si présente) */
-            section[data-testid="stSidebar"] {
-                --sidebar-w: 18rem; /* valeur par défaut */
-            }
-            section[data-testid="stSidebar"] .sidebar-bottom.use-var {
-                width: calc(var(--sidebar-w) - 24px);
-            }
+            /* Le spacer pousse ce qui suit en bas */
+            .sidebar-flex-spacer { flex: 1 1 auto; }
             </style>
             """,
             unsafe_allow_html=True,
         )
-        st.session_state["_sidebar_footer_css_v2"] = True
+        st.session_state["_sidebar_footer_css_flex"] = True
 
     with st.sidebar:
-        # Conteneur fixé en bas
-        st.markdown('<div class="sidebar-bottom">', unsafe_allow_html=True)
-        if st.button(label, use_container_width=True, key="logout_sidebar_fixed"):
+        # Spacer qui prend tout l'espace restant
+        st.markdown('<div class="sidebar-flex-spacer"></div>', unsafe_allow_html=True)
+        # Le bouton vient APRES le spacer -> donc tout en bas
+        if st.button(label, use_container_width=True, key="logout_sidebar_bottom_final"):
             logout(sb)
             st.rerun()
-        st.markdown('</div>', unsafe_allow_html=True)
+
 
 

@@ -1,6 +1,7 @@
 import streamlit as st
 from supa import get_client
 from utils import require_login, logout  # <-- plus de set_cookie/del_cookie
+from utils import sidebar_logout_bottom
 
 st.set_page_config(page_title="Trail Tracker", layout="wide")
 
@@ -18,6 +19,8 @@ st.success(f"Connecté : {st.session_state['user']['email']}")
 if st.button("Se déconnecter"):
     logout(sb)
     st.rerun()
+    
+sidebar_logout_bottom(sb)
 
 # ---- Contenu d’accueil
 st.write("👈 Utilise le menu **Pages** (en haut à gauche) :")

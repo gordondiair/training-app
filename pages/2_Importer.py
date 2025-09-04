@@ -51,10 +51,8 @@ def _to_bool(x):
     if isinstance(x, bool):
         return x
     s = str(x).strip().lower()
-    if s in ("true","1","yes","y","vrai","oui"):
-        return True
-    if s in ("false","0","no","n","faux","non"):
-        return False
+    if s in ("true","1","yes","y","vrai","oui"):  return True
+    if s in ("false","0","no","n","faux","non"):  return False
     return None
 
 def _to_int(x):
@@ -136,20 +134,19 @@ TABLE_COLS = [
     "long_run","for_a_cause","media_text",
 ]
 
-SPECIAL_HEADER_MAP = {"type": "type_text","media": "media_text","bike": "bike_text","gear": "gear_text"}
+SPECIAL_HEADER_MAP = {"type":"type_text","media":"media_text","bike":"bike_text","gear":"gear_text"}
 
-BOOL_COLS = {"commute","prefer_perceived_exertion","commute_1","from_upload","flagged","with_pet","competition","long_run","for_a_cause"}
-INT_COLS  = {"elapsed_time","activity_id","uphill_time","downhill_time","other_time","power_count","perceived_relative_effort","relative_effort_1","number_of_runs","jump_count","total_cycles","timer_time","max_heart_rate_1","average_heart_rate","total_steps"}
-TIME_COLS = {"start_time","sunrise_time","sunset_time"}
-TS_COLS   = {"activity_date","weather_observation_time"}
+BOOL_COLS  = {"commute","prefer_perceived_exertion","commute_1","from_upload","flagged","with_pet","competition","long_run","for_a_cause"}
+INT_COLS   = {"elapsed_time","activity_id","uphill_time","downhill_time","other_time","power_count","perceived_relative_effort","relative_effort_1","number_of_runs","jump_count","total_cycles","timer_time","max_heart_rate_1","average_heart_rate","total_steps"}
+TIME_COLS  = {"start_time","sunrise_time","sunset_time"}
+TS_COLS    = {"activity_date","weather_observation_time"}
 FLOAT_COLS = set(TABLE_COLS) - BOOL_COLS - INT_COLS - TIME_COLS - TS_COLS - {
     "type_text","activity_name","activity_type","activity_description","activity_private_note",
     "activity_gear","filename","weather_condition","bike_text","gear_text","precipitation_type","media_text"
 }
-TEXT_COLS = set(TABLE_COLS) - (BOOL_COLS | INT_COLS | TIME_COLS | TS_COLS | FLOAT_COLS)
+TEXT_COLS  = set(TABLE_COLS) - (BOOL_COLS | INT_COLS | TIME_COLS | TS_COLS | FLOAT_COLS)
 
-# Convertisseurs par colonne
-def _text_conv(x):  # text sûr
+def _text_conv(x):
     if x is None or (isinstance(x, float) and pd.isna(x)) or str(x).strip()=="":
         return None
     return str(x)
@@ -162,10 +159,8 @@ for c in TIME_COLS:  CONVERTER_BY_COL[c] = _to_time
 for c in TS_COLS:    CONVERTER_BY_COL[c] = _to_timestamptz
 for c in TEXT_COLS:  CONVERTER_BY_COL[c] = _text_conv
 
-# Tolerances doublons
-D_TOL_KM   = 0.2
-DPLUS_TOL  = 50.0
-DMOINS_TOL = 50.0
+# Doublons: tolérances
+D_TOL_KM, DPLUS_TOL, DMOINS_TOL = 0.2, 50.0, 50.0
 
 # =========================
 # Auth
@@ -189,41 +184,27 @@ if "import_decisions" not in st.session_state:
     st.session_state.import_decisions = {}
 
 # =========================
-# JSON-safe (col-aware)
+# JSON-safe colonne-aware
 # =========================
 def _json_safe_row(row: Dict[str, Any]) -> Dict[str, Any]:
     safe: Dict[str, Any] = {}
     for k, v in row.items():
-        # 1) NaN/NaT -> None
         try:
-            if pd.isna(v):
-                v = None
+            if pd.isna(v): v = None
         except Exception:
             pass
-
-        # 2) Si c'est une chaîne numérique -> nombre
         if isinstance(v, str) and _looks_numeric_str(v):
             v = _coerce_numeric_str_any(v)
-
-        # 3) Si la colonne est INT et qu'on a un float entier -> int
         if k in INT_COLS:
             if isinstance(v, float) and math.isfinite(v) and float(v).is_integer():
                 v = int(v)
-            # Si c'est encore une chaîne numérique, cast en int
             if isinstance(v, str) and _looks_numeric_str(v):
-                try:
-                    v = int(float(v))
-                except Exception:
-                    v = None
-
-        # 4) Floats infinis -> None
+                try: v = int(float(v))
+                except Exception: v = None
         if isinstance(v, float) and not math.isfinite(v):
             v = None
-
-        # 5) Timestamps -> ISO (au cas où)
         if isinstance(v, (pd.Timestamp, datetime)):
             v = v.isoformat()
-
         safe[k] = v
     return safe
 
@@ -231,43 +212,40 @@ def _json_safe_row(row: Dict[str, Any]) -> Dict[str, Any]:
 # DB I/O
 # =========================
 def fetch_existing_rows(min_dt_iso: str, max_dt_iso: str) -> List[Dict[str, Any]]:
-    sel_cols = ["id","user_id","activity_id","activity_date","activity_name","activity_type","distance","elevation_gain","elevation_loss","moving_time"]
-    q = (sb.table("strava_import")
-            .select(",".join(sel_cols))
-            .eq("user_id", user["id"])
-            .gte("activity_date", min_dt_iso)
-            .lte("activity_date", max_dt_iso)
-            .order("activity_date", desc=False))
-    res = q.execute()
+    sel = ["id","user_id","activity_id","activity_date","activity_name","activity_type",
+           "distance","elevation_gain","elevation_loss","moving_time"]
+    res = (sb.table("strava_import")
+             .select(",".join(sel))
+             .eq("user_id", user["id"])
+             .gte("activity_date", min_dt_iso)
+             .lte("activity_date", max_dt_iso)
+             .order("activity_date", desc=False)
+           ).execute()
     return res.data or []
 
 def _finalize_payload(row_dict: Dict[str, Any]) -> Dict[str, Any]:
-    payload: Dict[str, Any] = {}
+    payload = {}
     for k in TABLE_COLS:
         conv = CONVERTER_BY_COL.get(k, lambda x: x)
-        v = conv(row_dict.get(k, None))
-        payload[k] = v
+        payload[k] = conv(row_dict.get(k, None))
     payload["user_id"] = user["id"]
-    # Passage JSON-safe colonne-aware
     return _json_safe_row(payload)
 
-def do_upserts(rows_insert: List[Dict[str, Any]], rows_replace: List[Tuple[int, Dict[str, Any]]], rows_combine: List[Tuple[int, Dict[str, Any]]]):
+def do_upserts(rows_insert: List[Dict[str, Any]],
+               rows_replace: List[Tuple[int, Dict[str, Any]]],
+               rows_combine: List[Tuple[int, Dict[str, Any]]]):
     if rows_insert:
-        safe_rows = [_json_safe_row(r) for r in rows_insert]
-        sb.table("strava_import").upsert(safe_rows, on_conflict="user_id,activity_id").execute()
+        sb.table("strava_import").upsert([_json_safe_row(r) for r in rows_insert],
+                                         on_conflict="user_id,activity_id").execute()
     for db_id, payload in rows_replace:
-        safe = _json_safe_row(payload)
-        sb.table("strava_import").update(safe).eq("id", db_id).eq("user_id", user["id"]).execute()
+        sb.table("strava_import").update(_json_safe_row(payload)).eq("id", db_id).eq("user_id", user["id"]).execute()
     for db_id, payload in rows_combine:
         curr = sb.table("strava_import").select("*").eq("id", db_id).single().execute().data
-        if not curr:
-            continue
+        if not curr: continue
         to_set = {}
         for k, v in payload.items():
-            if k in ("id","user_id","created_at","updated_at"):
-                continue
-            if k not in TABLE_COLS:
-                continue
+            if k in ("id","user_id","created_at","updated_at"): continue
+            if k not in TABLE_COLS: continue
             if (curr.get(k) is None) and (v is not None and v != ""):
                 to_set[k] = v
         if to_set:
@@ -280,46 +258,45 @@ if up:
     raw = up.read()
     df = pd.read_csv(io.BytesIO(raw))
 
-    # headers
+    # -- Normalisation en-têtes
     df.columns = [_snake(c) for c in df.columns]
     df = df.rename(columns={k: v for k, v in SPECIAL_HEADER_MAP.items() if k in df.columns})
 
-    # --- Filtrer uniquement les activités de course ---
-RUN_TYPES = {"run", "trail_run", "virtual_run"}  # ou {"run"} si tu veux strict
-if "activity_type" in df.columns:
-    df["__atype_norm"] = df["activity_type"].astype(str).map(_snake)
-    before = len(df)
-    df = df[df["__atype_norm"].isin(RUN_TYPES)].drop(columns=["__atype_norm"])
-    if len(df) == 0:
-        st.warning("Aucune activité de type course (run) trouvée dans ce CSV.")
-        st.stop()
+    # -- Filtre RUN ONLY (adapter si besoin)
+    RUN_TYPES = {"run", "trail_run", "virtual_run"}  # mettre {"run"} si strict
+    if "activity_type" in df.columns:
+        df["__atype_norm"] = df["activity_type"].astype(str).map(_snake)
+        before = len(df)
+        df = df[df["__atype_norm"].isin(RUN_TYPES)].drop(columns=["__atype_norm"])
+        if len(df) == 0:
+            st.warning("Aucune activité de type course (run) trouvée dans ce CSV.")
+            st.stop()
+        else:
+            st.caption(f"Filtre 'run' appliqué : {len(df)}/{before} lignes conservées.")
     else:
-        st.caption(f"Filtre 'run' appliqué : {len(df)}/{before} lignes conservées.")
-else:
-    st.warning("Colonne `activity_type` absente : impossible de filtrer les 'run'.")
-    st.stop()
+        st.warning("Colonne `activity_type` absente : impossible de filtrer les 'run'.")
+        st.stop()
 
-
-    # aligner colonnes
+    # -- Aligner colonnes
     for col in TABLE_COLS:
         if col not in df.columns:
             df[col] = None
     df = df[TABLE_COLS]
 
-    # typage (DataFrame)
+    # -- Typage initial (DF)
     for c in df.columns:
         conv = CONVERTER_BY_COL.get(c)
         if conv:
             df[c] = df[c].map(conv)
 
-    # universal : chaînes numériques -> nombres
+    # -- Chaînes numériques -> nombres (universel)
     for c in df.columns:
         df[c] = df[c].map(_coerce_numeric_str_any)
 
-    # NaN -> None
+    # -- NaN -> None
     df = df.where(pd.notna(df), None)
 
-    # fenêtre temporelle
+    # -- Fenêtre temporelle pour la recherche de doublons
     try:
         min_dt = pd.to_datetime(df["activity_date"]).min()
         max_dt = pd.to_datetime(df["activity_date"]).max()
@@ -333,20 +310,18 @@ else:
     existing = fetch_existing_rows(min_dt.isoformat(), max_dt.isoformat())
 
     def _date_only(ts):
-        try:
-            return pd.to_datetime(ts).date()
-        except Exception:
-            return None
+        try: return pd.to_datetime(ts).date()
+        except Exception: return None
 
     by_day: Dict[Any, List[Dict[str, Any]]] = {}
     for r in existing:
         d = _date_only(r.get("activity_date"))
         by_day.setdefault(d, []).append(r)
 
-    # doublons
+    # -- Détection des doublons (même jour + distance & D+/D- proches)
     rows_to_show = []
     duplicate_found = False
-    for idx, row in df.iterrows():
+    for _, row in df.iterrows():
         d_day = _date_only(row.get("activity_date"))
         dist_km_new = _to_float(row.get("distance")) or 0.0
         dplus_new   = _to_float(row.get("elevation_gain")) or 0.0
@@ -358,20 +333,20 @@ else:
             dist_km_old = _to_float(cand.get("distance")) or 0.0
             dplus_old   = _to_float(cand.get("elevation_gain")) or 0.0
             dmoins_old  = _to_float(cand.get("elevation_loss")) or 0.0
-            if abs(dist_km_new - dist_km_old) <= D_TOL_KM and abs(dplus_new - dplus_old) <= DPLUS_TOL and abs(dmoins_new - dmoins_old) <= DMOINS_TOL:
+            if abs(dist_km_new - dist_km_old) <= D_TOL_KM and \
+               abs(dplus_new - dplus_old) <= DPLUS_TOL and \
+               abs(dmoins_new - dmoins_old) <= DMOINS_TOL:
                 match = cand
                 duplicate_found = True
                 break
 
-        rows_to_show.append((idx, row.to_dict(), match))
+        rows_to_show.append((row.to_dict(), match))
 
     # ===== Aucun doublon -> import silencieux =====
     if not duplicate_found:
         insert_payloads: List[Dict[str, Any]] = []
-        for (_, new_row, _) in rows_to_show:
-            payload = _finalize_payload(new_row)
-            insert_payloads.append(payload)
-
+        for (new_row, _) in rows_to_show:
+            insert_payloads.append(_finalize_payload(new_row))
         try:
             do_upserts(insert_payloads, [], [])
             st.success(f"Import terminé ✅  | Insérés: {len(insert_payloads)}")
@@ -380,41 +355,27 @@ else:
                 st.dataframe(pd.DataFrame(insert_payloads).head(10))
         except Exception as e:
             st.error(f"Erreur pendant l'import : {e}")
-            with st.expander("Diagnostic détaillé"):
-                st.write("Recherche de valeurs à risque (chaînes numériques / floats entiers sur colonnes INT) :")
-                probs = []
-                for r in insert_payloads:
-                    row_probs = []
-                    for k, v in r.items():
-                        if isinstance(v, str) and _looks_numeric_str(v):
-                            row_probs.append((k, type(v).__name__, v))
-                        if (k in INT_COLS) and isinstance(v, float) and math.isfinite(v) and float(v).is_integer():
-                            row_probs.append((k, type(v).__name__, v))
-                    if row_probs:
-                        probs.append(row_probs)
-                st.write(probs)
 
     # ===== Doublons -> UI décisions =====
     else:
         with st.expander("Aperçu rapide du parsing (premières lignes)", expanded=False):
             st.dataframe(df.head(10))
-
         st.subheader("Vérification des doublons et choix d’action")
 
         with global_action_col:
             st.write("Actions globales :")
             c1, c2, c3, c4 = st.columns(4)
             if c1.button("Tout combiner"):
-                for (i, _, m) in rows_to_show:
+                for i, (new_row, m) in enumerate(rows_to_show):
                     st.session_state.import_decisions[i] = "combine" if m else "insert"
             if c2.button("Tout remplacer"):
-                for (i, _, m) in rows_to_show:
+                for i, (new_row, m) in enumerate(rows_to_show):
                     st.session_state.import_decisions[i] = "replace" if m else "insert"
             if c3.button("Tout ignorer"):
-                for (i, _, m) in rows_to_show:
+                for i, _ in enumerate(rows_to_show):
                     st.session_state.import_decisions[i] = "ignore"
             if c4.button("Tout insérer quand même"):
-                for (i, _, m) in rows_to_show:
+                for i, _ in enumerate(rows_to_show):
                     st.session_state.import_decisions[i] = "insert"
 
         st.markdown("---")
@@ -423,11 +384,10 @@ else:
         replace_payloads: List[Tuple[int, Dict[str, Any]]] = []
         combine_payloads: List[Tuple[int, Dict[str, Any]]] = []
 
-        for (i, new_row, existing_row) in rows_to_show:
+        for i, (new_row, existing_row) in enumerate(rows_to_show):
             box = st.container(border=True)
             with box:
                 left, right = st.columns([3,2])
-
                 try:
                     date_lbl = pd.to_datetime(new_row.get("activity_date")).strftime("%Y-%m-%d %H:%M")
                 except Exception:
@@ -469,7 +429,6 @@ else:
                 cnp4.write(f"D+ / D-: {new_row.get('elevation_gain')} / {new_row.get('elevation_loss')}")
 
                 payload = _finalize_payload(new_row)
-
                 if choice == "insert" and not existing_row:
                     insert_payloads.append(payload)
                 elif choice == "replace" and existing_row:
@@ -490,19 +449,6 @@ else:
                     st.balloons()
                 except Exception as e:
                     st.error(f"Erreur pendant l'import : {e}")
-                    with st.expander("Diagnostic détaillé"):
-                        st.write("Insert payloads — valeurs à risque :")
-                        probs = []
-                        for r in insert_payloads:
-                            row_probs = []
-                            for k, v in r.items():
-                                if isinstance(v, str) and _looks_numeric_str(v):
-                                    row_probs.append((k, type(v).__name__, v))
-                                if (k in INT_COLS) and isinstance(v, float) and math.isfinite(v) and float(v).is_integer():
-                                    row_probs.append((k, type(v).__name__, v))
-                            if row_probs:
-                                probs.append(row_probs)
-                        st.write(probs)
 
 else:
     st.info("Dépose un fichier CSV Strava pour commencer.")

@@ -4,17 +4,6 @@ from utils import require_login, logout  # <-- plus de set_cookie/del_cookie
 
 st.set_page_config(page_title="Trail Tracker", layout="wide")
 
-# --- Masquer le libellé auto ("app") et afficher "Accueil" ---
-st.markdown("""
-<style>
-/* Cache le titre auto du nav latéral (celui qui montre "app") */
-div[data-testid="stSidebarNav"] > div:first-child { display: none !important; }
-</style>
-""", unsafe_allow_html=True)
-
-with st.sidebar:
-    st.title("Accueil")
-
 # ---- Boot / client Supabase + login obligatoire ----
 sb = get_client()
 u = require_login(sb)  # bloque tant que l’utilisateur n’est pas connecté

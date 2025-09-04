@@ -108,26 +108,58 @@ def _to_timestamptz(s):
         return datetime.now(timezone.utc).isoformat()
 
 # =========================
+# Conversions spécifiques
+# =========================
+def _sec_to_min_int(x):
+    """secondes -> minutes (entier, arrondi)."""
+    v = _to_float(x)
+    if v is None: return None
+    return int(round(v / 60.0))
+
+def _sec_to_min_float(x):
+    """secondes -> minutes (float)."""
+    v = _to_float(x)
+    if v is None: return None
+    return v / 60.0
+
+def _ms_to_min_per_km(x):
+    """m/s -> min/km."""
+    v = _to_float(x)
+    if v is None or v == 0: return None
+    return 1000.0 / (v * 60.0)  # = 16.6666667 / v
+
+# =========================
 # Schéma / Types
+# (colonnes supprimées retirées du schéma)
 # =========================
 TABLE_COLS = [
     "activity_id","activity_date","activity_name","activity_type","activity_description",
     "elapsed_time","distance","max_heart_rate","relative_effort","commute","activity_private_note",
-    "activity_gear","filename","athlete_weight","bike_weight","elapsed_time_1","moving_time",
-    "distance_1","max_speed","average_speed","elevation_gain","elevation_loss","elevation_low",
+    "activity_gear","filename","athlete_weight",
+    # "bike_weight" SUPPRIMÉ
+    # "elapsed_time_1" SUPPRIMÉ
+    "moving_time",
+    # "distance_1" SUPPRIMÉ
+    "max_speed","average_speed","elevation_gain","elevation_loss","elevation_low",
     "elevation_high","max_grade","average_grade","average_positive_grade","average_negative_grade",
-    "max_cadence","average_cadence","max_heart_rate_1","average_heart_rate","max_watts",
-    "average_watts","calories","max_temperature","average_temperature","relative_effort_1",
+    "max_cadence","average_cadence","max_heart_rate_1","average_heart_rate",
+    # "max_watts","average_watts" SUPPRIMÉS
+    "calories","max_temperature","average_temperature","relative_effort_1",
     "total_work","number_of_runs","uphill_time","downhill_time","other_time","perceived_exertion",
     "type_text","start_time","weighted_average_power","power_count","prefer_perceived_exertion",
     "perceived_relative_effort","commute_1","total_weight_lifted","from_upload","grade_adjusted_distance",
     "weather_observation_time","weather_condition","weather_temperature","apparent_temperature",
     "dewpoint","humidity","weather_pressure","wind_speed","wind_gust","wind_bearing",
-    "precipitation_intensity","sunrise_time","sunset_time","moon_phase","bike_text","gear_text",
+    "precipitation_intensity",
+    # "sunrise_time","sunset_time" SUPPRIMÉS
+    "moon_phase",
+    # "bike_text","gear_text" SUPPRIMÉS
     "precipitation_probability","precipitation_type","cloud_cover","weather_visibility","uv_index",
     "weather_ozone","jump_count","total_grit","average_flow","flagged","average_elapsed_speed",
     "dirt_distance","newly_explored_distance","newly_explored_dirt_distance","activity_count",
-    "total_steps","carbon_saved","pool_length","training_load","intensity",
+    "total_steps",
+    # "carbon_saved" SUPPRIMÉ
+    "pool_length","training_load","intensity",
     "average_grade_adjusted_pace","timer_time","total_cycles","recovery","with_pet","competition",
     "long_run","for_a_cause","media_text",
 ]
@@ -136,20 +168,17 @@ SPECIAL_HEADER_MAP = {"type":"type_text","media":"media_text","bike":"bike_text"
 
 # Types par colonne
 BOOL_COLS  = {"commute","prefer_perceived_exertion","commute_1","from_upload","flagged","with_pet","competition","long_run","for_a_cause"}
+# elapsed_time reste INT (minutes entières)
 INT_COLS   = {"elapsed_time","activity_id","uphill_time","downhill_time","other_time","power_count","perceived_relative_effort","relative_effort_1","number_of_runs","jump_count","total_cycles","timer_time","max_heart_rate_1","average_heart_rate","total_steps"}
-TIME_COLS  = {"start_time","sunrise_time","sunset_time"}
+TIME_COLS  = {"start_time"}  # sunrise/sunset supprimés
 TS_COLS    = {"activity_date","weather_observation_time"}
+
+# FLOAT_COLS est tout le reste non bool/int/time/ts:
 FLOAT_COLS = set(TABLE_COLS) - BOOL_COLS - INT_COLS - TIME_COLS - TS_COLS - {
     "type_text","activity_name","activity_type","activity_description","activity_private_note",
-    "activity_gear","filename","weather_condition","bike_text","gear_text","precipitation_type","media_text"
+    "activity_gear","filename","weather_condition","precipitation_type","media_text"
 }
 TEXT_COLS  = set(TABLE_COLS) - (BOOL_COLS | INT_COLS | TIME_COLS | TS_COLS | FLOAT_COLS)
-
-# ⚠️ Distances Strava en mètres -> à convertir en km
-DIST_M_COLS = {
-    "distance", "distance_1", "grade_adjusted_distance",
-    "dirt_distance", "newly_explored_distance", "newly_explored_dirt_distance"
-}
 
 def _text_conv(x):
     if x is None or (isinstance(x, float) and pd.isna(x)) or str(x).strip()=="":
@@ -163,6 +192,9 @@ for c in FLOAT_COLS: CONVERTER_BY_COL[c] = _to_float
 for c in TIME_COLS:  CONVERTER_BY_COL[c] = _to_time
 for c in TS_COLS:    CONVERTER_BY_COL[c] = _to_timestamptz
 for c in TEXT_COLS:  CONVERTER_BY_COL[c] = _text_conv
+
+# ⚠️ Distances Strava : déjà en km → aucune conversion /1000
+DIST_M_COLS = set()  # (désactivé)
 
 # Doublons: tolérances (sur km)
 D_TOL_KM, DPLUS_TOL, DMOINS_TOL = 0.2, 50.0, 50.0
@@ -285,22 +317,49 @@ if up:
         st.warning("Colonne `activity_type` absente : impossible de filtrer les 'run'.")
         st.stop()
 
-    # -- Aligner colonnes
+    # -- Colonnes supprimées (ne pas importer)
+    DROP_COLS = {
+        "bike_weight","elapsed_time_1","distance_1","max_watts","average_watts",
+        "sunrise_time","sunset_time","bike_text","gear_text","carbon_saved"
+    }
+    to_drop = [c for c in DROP_COLS if c in df.columns]
+    if to_drop:
+        df = df.drop(columns=to_drop)
+
+    # -- Aligner colonnes cibles (sans récréer celles qu'on supprime)
     for col in TABLE_COLS:
         if col not in df.columns:
             df[col] = None
+    # Garder uniquement les colonnes utiles à la BD
     df = df[TABLE_COLS]
 
-    # -- Typage initial
-    for c in df.columns:
-        conv = CONVERTER_BY_COL.get(c)
-        if conv:
-            df[c] = df[c].map(conv)
+    # ========= Transformations AVANT typage final =========
 
-    # -- Distances m -> km (sur les colonnes identifiées)
-    for c in DIST_M_COLS:
-        if c in df.columns:
-            df[c] = df[c].map(lambda v: (v / 1000.0) if isinstance(v, (int, float)) and v is not None else (v / 1000.0 if (isinstance(v, float) and pd.notna(v)) else None))
+    # elapsed_time (s) -> minutes (int arrondi)
+    if "elapsed_time" in df.columns:
+        df["elapsed_time"] = df["elapsed_time"].map(_sec_to_min_int)
+
+    # moving_time (s) -> minutes (float)
+    if "moving_time" in df.columns:
+        df["moving_time"] = df["moving_time"].map(_sec_to_min_float)
+
+    # Vitesse (m/s) -> allure (min/km)
+    if "max_speed" in df.columns:
+        df["max_speed"] = df["max_speed"].map(_ms_to_min_per_km)
+    if "average_speed" in df.columns:
+        df["average_speed"] = df["average_speed"].map(_ms_to_min_per_km)
+
+    # Cadence rpm -> ppm (×2)
+    if "max_cadence" in df.columns:
+        df["max_cadence"] = df["max_cadence"].map(lambda v: _to_float(v)*2 if _to_float(v) is not None else None)
+    if "average_cadence" in df.columns:
+        df["average_cadence"] = df["average_cadence"].map(lambda v: _to_float(v)*2 if _to_float(v) is not None else None)
+
+    # average_grade_adjusted_pace (m/s) -> min/km
+    if "average_grade_adjusted_pace" in df.columns:
+        df["average_grade_adjusted_pace"] = df["average_grade_adjusted_pace"].map(_ms_to_min_per_km)
+
+    # (Aucune conversion distance -> km : déjà en km)
 
     # -- Chaînes numériques -> nombres (universel)
     for c in df.columns:
@@ -309,7 +368,7 @@ if up:
     # -- NaN -> None
     df = df.where(pd.notna(df), None)
 
-    # -- Fenêtre temporelle
+    # -- Fenêtre temporelle pour lookup des doublons
     try:
         min_dt = pd.to_datetime(df["activity_date"]).min()
         max_dt = pd.to_datetime(df["activity_date"]).max()

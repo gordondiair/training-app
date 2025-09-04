@@ -24,7 +24,7 @@ def _looks_numeric_str(s: Any) -> bool:
     return isinstance(s, str) and _NUMERIC_STR_RE.match(s.strip() or "") is not None
 
 def _coerce_numeric_str_any(s: Any):
-    """Si s est '7.0'/'7'/'-3.50', renvoie int ou float. Sinon renvoie s inchangé."""
+    """'7'/'7.0'/'-3.50' -> int ou float ; sinon inchangé."""
     if not _looks_numeric_str(s):
         return s
     try:
@@ -46,17 +46,15 @@ def _snake(s: str) -> str:
     return s
 
 def _to_bool(x):
-    if x is None or (isinstance(x, float) and pd.isna(x)):
-        return None
-    if isinstance(x, bool):
-        return x
+    if x is None or (isinstance(x, float) and pd.isna(x)): return None
+    if isinstance(x, bool): return x
     s = str(x).strip().lower()
     if s in ("true","1","yes","y","vrai","oui"):  return True
     if s in ("false","0","no","n","faux","non"):  return False
     return None
 
 def _to_int(x):
-    if x is None or (isinstance(x, float) and pd.isna(x)) or str(x).strip() == "":
+    if x is None or (isinstance(x, float) and pd.isna(x)) or str(x).strip()=="":
         return None
     x = _coerce_numeric_str_any(x)
     try:
@@ -68,7 +66,7 @@ def _to_int(x):
             return None
 
 def _to_float(x):
-    if x is None or (isinstance(x, float) and pd.isna(x)) or str(x).strip() == "":
+    if x is None or (isinstance(x, float) and pd.isna(x)) or str(x).strip()=="":
         return None
     x = _coerce_numeric_str_any(x)
     try:
@@ -78,8 +76,8 @@ def _to_float(x):
         return None
 
 def _to_time(s):
-    """Renvoie 'HH:MM:SS' (JSON-safe) ou None."""
-    if s is None or (isinstance(s, float) and pd.isna(s)) or str(s).strip() == "":
+    """Renvoie 'HH:MM:SS' ou None (JSON-safe)."""
+    if s is None or (isinstance(s, float) and pd.isna(s)) or str(s).strip()=="":
         return None
     txt = str(s).strip()
     for fmt in ("%H:%M:%S", "%H:%M"):
@@ -92,7 +90,7 @@ def _to_time(s):
 
 def _to_timestamptz(s):
     """Renvoie ISO 8601 (UTC si pas de tz) ou None."""
-    if s is None or (isinstance(s, float) and pd.isna(s)) or str(s).strip() == "":
+    if s is None or (isinstance(s, float) and pd.isna(s)) or str(s).strip()=="":
         return None
     txt = str(s).strip()
     for fmt in ("%Y-%m-%d %H:%M:%S%z", "%Y-%m-%d %H:%M:%S", "%d/%m/%Y %H:%M:%S", "%Y-%m-%d"):
@@ -184,25 +182,35 @@ if "import_decisions" not in st.session_state:
     st.session_state.import_decisions = {}
 
 # =========================
-# JSON-safe colonne-aware
+# Normalisation JSON — UNIVERSAL GUARD
 # =========================
 def _json_safe_row(row: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Dernier filet universel :
+      - NaN/NaT -> None
+      - str numérique -> nombre (int si entier)
+      - tout float entier -> int (peu importe la colonne)
+      - inf -> None
+      - timestamps -> ISO
+    """
     safe: Dict[str, Any] = {}
     for k, v in row.items():
+        # NaN/NaT
         try:
-            if pd.isna(v): v = None
+            if pd.isna(v):
+                v = None
         except Exception:
             pass
+        # str numérique -> nombre
         if isinstance(v, str) and _looks_numeric_str(v):
             v = _coerce_numeric_str_any(v)
-        if k in INT_COLS:
-            if isinstance(v, float) and math.isfinite(v) and float(v).is_integer():
-                v = int(v)
-            if isinstance(v, str) and _looks_numeric_str(v):
-                try: v = int(float(v))
-                except Exception: v = None
+        # float entier -> int (UNIVERSEL)
+        if isinstance(v, float) and math.isfinite(v) and float(v).is_integer():
+            v = int(v)
+        # inf -> None
         if isinstance(v, float) and not math.isfinite(v):
             v = None
+        # timestamp -> ISO
         if isinstance(v, (pd.Timestamp, datetime)):
             v = v.isoformat()
         safe[k] = v
@@ -258,12 +266,12 @@ if up:
     raw = up.read()
     df = pd.read_csv(io.BytesIO(raw))
 
-    # -- Normalisation en-têtes
+    # -- Headers normalisés & remap
     df.columns = [_snake(c) for c in df.columns]
     df = df.rename(columns={k: v for k, v in SPECIAL_HEADER_MAP.items() if k in df.columns})
 
-    # -- Filtre RUN ONLY (adapter si besoin)
-    RUN_TYPES = {"run", "trail_run", "virtual_run"}  # mettre {"run"} si strict
+    # -- Filtre RUN ONLY
+    RUN_TYPES = {"run", "trail_run", "virtual_run"}  # mets {"run"} si tu veux strict
     if "activity_type" in df.columns:
         df["__atype_norm"] = df["activity_type"].astype(str).map(_snake)
         before = len(df)
@@ -283,20 +291,20 @@ if up:
             df[col] = None
     df = df[TABLE_COLS]
 
-    # -- Typage initial (DF)
+    # -- Typage initial
     for c in df.columns:
         conv = CONVERTER_BY_COL.get(c)
         if conv:
             df[c] = df[c].map(conv)
 
-    # -- Chaînes numériques -> nombres (universel)
+    # -- Chaînes numériques -> nombres (universel sur DF)
     for c in df.columns:
         df[c] = df[c].map(_coerce_numeric_str_any)
 
     # -- NaN -> None
     df = df.where(pd.notna(df), None)
 
-    # -- Fenêtre temporelle pour la recherche de doublons
+    # -- Fenêtre temporelle
     try:
         min_dt = pd.to_datetime(df["activity_date"]).min()
         max_dt = pd.to_datetime(df["activity_date"]).max()
@@ -318,7 +326,7 @@ if up:
         d = _date_only(r.get("activity_date"))
         by_day.setdefault(d, []).append(r)
 
-    # -- Détection des doublons (même jour + distance & D+/D- proches)
+    # -- Détection doublons
     rows_to_show = []
     duplicate_found = False
     for _, row in df.iterrows():

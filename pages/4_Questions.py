@@ -28,7 +28,60 @@ user = st.session_state.get("user")
 if not user:
     st.stop()
 
+# =========================
+# Clé OpenAI : chargement + vérifs hors-ligne
+# =========================
+def _detect_key_source() -> str:
+    # Priorité à st.secrets, puis variables d'environnement
+    if "OPENAI_API_KEY" in st.secrets and st.secrets.get("OPENAI_API_KEY"):
+        return "st.secrets"
+    if os.getenv("OPENAI_API_KEY"):
+        return "env"
+    return "absent"
+
+def _validate_key_format(k: str) -> Dict[str, Any]:
+    """
+    Vérifications purement locales (aucun appel réseau) :
+    - présence
+    - prefix attendu (ex: 'sk-' ou 'oa-') — OpenAI utilise plusieurs préfixes
+    - longueur minimale
+    - caractères autorisés
+    NB : ça ne prouve PAS que la clé est valide côté OpenAI, seulement qu'elle 'a l'air' correcte.
+    """
+    if not k:
+        return {"present": False, "prefix_ok": False, "length_ok": False, "charset_ok": False}
+
+    # Préfixes connus (évolutifs). On reste souple :
+    prefix_ok = bool(re.match(r"^(sk|oa|opai|sess)-", k))
+
+    # Longueur arbitrairement raisonnable (clés ~40-80+ chars)
+    length_ok = len(k) >= 30
+
+    # Caractères alphanum + - _ ~ (on reste permissif)
+    charset_ok = bool(re.match(r"^[A-Za-z0-9\-\_\~]+$", k))
+
+    return {
+        "present": True,
+        "prefix_ok": prefix_ok,
+        "length_ok": length_ok,
+        "charset_ok": charset_ok,
+    }
+
 OPENAI_API_KEY = st.secrets.get("OPENAI_API_KEY", os.getenv("OPENAI_API_KEY", ""))
+key_source = _detect_key_source()
+key_checks = _validate_key_format(OPENAI_API_KEY)
+
+with st.expander("🔐 État de la clé OpenAI (aucun appel réseau)"):
+    st.write("- Source détectée :", f"`{key_source}`")
+    st.write("- Clé présente :", "✅" if key_checks["present"] else "❌")
+    if key_checks["present"]:
+        masked = (OPENAI_API_KEY[:4] + "…" + OPENAI_API_KEY[-4:]) if len(OPENAI_API_KEY) >= 10 else "…"
+        st.write("- Aperçu masqué :", masked)
+        st.write("- Préfixe attendu ('sk-', 'oa-', etc.) :", "✅" if key_checks["prefix_ok"] else "⚠️")
+        st.write("- Longueur raisonnable (≥30) :", "✅" if key_checks["length_ok"] else "⚠️")
+        st.write("- Caractères autorisés :", "✅" if key_checks["charset_ok"] else "⚠️")
+        if not all([key_checks["prefix_ok"], key_checks["length_ok"], key_checks["charset_ok"]]):
+            st.info("Ces vérifications sont locales. Pour confirmer réellement la validité côté OpenAI, utilise le test ci-dessous.")
 
 # =========================
 # Helpers
@@ -399,34 +452,28 @@ st.session_state.chat_history += [
     {"role":"assistant","content": final_text}
 ]
 
-# ===== DEBUG OpenAI — à SUPPRIMER après test =====
-with st.expander("🔧 Diagnostic OpenAI (temporaire)"):
-    st.write("Clé trouvée dans st.secrets :", bool(OPENAI_API_KEY))
-    if OPENAI_API_KEY:
-        # Affiche juste le début de la clé (masqué)
-        st.write("Préfixe de la clé :", (OPENAI_API_KEY[:4] + "…") if len(OPENAI_API_KEY) >= 4 else "…")
-
-    if st.button("▶️ Tester un mini-appel API"):
-        try:
-            from openai import OpenAI
-            client = OpenAI(api_key=OPENAI_API_KEY)
-            r = client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[{"role": "user", "content": "Réponds UNIQUEMENT: OK"}],
-                max_tokens=2,
-                temperature=0
-            )
-            out = (r.choices[0].message.content or "").strip()
-            st.success(f"Réponse API: {out!r}")
-        except Exception as e:
-            st.error(f"Échec de l'appel API → {e}")
-# ===== FIN DEBUG =====
-
+# ===== Vérification optionnelle en ligne (facultative) =====
+with st.expander("🧪 Test réel de l'API (optionnel)"):
+    st.caption("Ce test effectue un appel minimal à l'API pour confirmer la validité de la clé côté OpenAI.")
+    if st.button("▶️ Lancer un mini-appel API"):
+        if not (key_checks["present"] and all([key_checks["prefix_ok"], key_checks["length_ok"], key_checks["charset_ok"]])):
+            st.warning("La clé ne passe pas les vérifications locales. Corrige d'abord la clé, puis réessaie.")
+        else:
+            try:
+                from openai import OpenAI
+                client = OpenAI(api_key=OPENAI_API_KEY)
+                r = client.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=[{"role": "user", "content": "Réponds UNIQUEMENT: OK"}],
+                    max_tokens=2,
+                    temperature=0
+                )
+                out = (r.choices[0].message.content or "").strip()
+                st.success(f"Réponse API: {out!r}  → ✅ clé opérationnelle")
+            except Exception as e:
+                st.error(f"Échec de l'appel API → {e}")
 
 # =========================
 # Affichage final — PHRASES UNIQUEMENT
 # =========================
 st.markdown(final_text)
-
-
-

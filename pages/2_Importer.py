@@ -1,5 +1,6 @@
 # pages/02_Importer.py
 import io
+import math
 import unicodedata
 from datetime import datetime, timezone
 from typing import Dict, Any, List, Tuple
@@ -28,16 +29,22 @@ def _snake(s: str) -> str:
     return s
 
 def _to_bool(x):
-    if pd.isna(x):
+    if x is None or (isinstance(x, float) and pd.isna(x)):
         return None
     if isinstance(x, bool):
         return x
     s = str(x).strip().lower()
-    return True if s in ("true","1","yes","y","vrai","oui") else False if s in ("false","0","no","n","faux","non") else None
+    if s in ("true", "1", "yes", "y", "vrai", "oui"):
+        return True
+    if s in ("false", "0", "no", "n", "faux", "non"):
+        return False
+    return None
 
 def _to_int(x):
+    if x is None or (isinstance(x, float) and pd.isna(x)) or str(x).strip() == "":
+        return None
     try:
-        return int(x) if x is not None and str(x) != "" and not pd.isna(x) else None
+        return int(x)
     except Exception:
         try:
             return int(float(x))
@@ -45,28 +52,33 @@ def _to_int(x):
             return None
 
 def _to_float(x):
+    if x is None or (isinstance(x, float) and pd.isna(x)) or str(x).strip() == "":
+        return None
     try:
-        return float(x) if x is not None and str(x) != "" and not pd.isna(x) else None
+        v = float(x)
+        # JSON ne supporte pas NaN/Inf
+        if not math.isfinite(v):
+            return None
+        return v
     except Exception:
         return None
 
 def _to_time(s):
+    """Renvoie toujours une chaîne HH:MM:SS (JSON-safe) ou None."""
     if s is None or (isinstance(s, float) and pd.isna(s)) or str(s).strip() == "":
         return None
-    # Accept "HH:MM:SS" or "H:MM"
-    try:
-        return datetime.strptime(str(s).strip(), "%H:%M:%S").time()
-    except Exception:
+    txt = str(s).strip()
+    for fmt in ("%H:%M:%S", "%H:%M"):
         try:
-            return datetime.strptime(str(s).strip(), "%H:%M").time()
+            t = datetime.strptime(txt, fmt).time()
+            return t.strftime("%H:%M:%S")
         except Exception:
-            return None
+            continue
+    return None
 
 def _to_timestamptz(s):
     if s is None or (isinstance(s, float) and pd.isna(s)) or str(s).strip() == "":
         return None
-    # Strava "Activity Date" est souvent local + offset, sinon parsable ISO
-    # On accepte plusieurs formats; à défaut, on garde utcnow
     txt = str(s).strip()
     for fmt in ("%Y-%m-%d %H:%M:%S%z", "%Y-%m-%d %H:%M:%S", "%d/%m/%Y %H:%M:%S", "%Y-%m-%d"):
         try:
@@ -81,6 +93,32 @@ def _to_timestamptz(s):
         return dt.isoformat()
     except Exception:
         return datetime.now(timezone.utc).isoformat()
+
+def _json_safe_value(v):
+    """Convertit toute valeur non JSON (NaN, NaT, Inf, Timestamp, etc.) en valeur sûre."""
+    # None
+    if v is None:
+        return None
+    # Pandas NA
+    try:
+        if pd.isna(v):
+            return None
+    except Exception:
+        pass
+    # Floats non finis
+    if isinstance(v, float) and not math.isfinite(v):
+        return None
+    # Pandas Timestamp -> ISO
+    if isinstance(v, (pd.Timestamp, )):
+        return v.isoformat()
+    # Datetime -> ISO
+    if isinstance(v, (datetime, )):
+        return v.isoformat()
+    # Tout le reste inchangé
+    return v
+
+def _json_safe_row(d: Dict[str, Any]) -> Dict[str, Any]:
+    return {k: _json_safe_value(v) for k, v in d.items()}
 
 # Colonnes exactes de la table public.strava_import (hors id/user_id/created_at/updated_at)
 TABLE_COLS = [
@@ -105,7 +143,7 @@ TABLE_COLS = [
     "long_run","for_a_cause","media_text",
 ]
 
-# Mapping "en-têtes Strava" -> "colonne SQL"
+# Mapping en-têtes spéciaux
 SPECIAL_HEADER_MAP = {
     "type": "type_text",
     "media": "media_text",
@@ -144,7 +182,7 @@ up = st.file_uploader("Déposer le CSV Strava", type=["csv"], accept_multiple_fi
 # Espace pour actions globales
 global_action_col, apply_col = st.columns([3,1])
 if "import_decisions" not in st.session_state:
-    st.session_state.import_decisions = {}  # key: row_index, value: action
+    st.session_state.import_decisions = {}
 
 # =========================
 # Fonctions DB
@@ -160,26 +198,18 @@ def fetch_existing_rows(min_dt_iso: str, max_dt_iso: str) -> List[Dict[str, Any]
     res = q.execute()
     return res.data or []
 
-def _row_to_payload(row: Dict[str, Any]) -> Dict[str, Any]:
-    payload = {k: row.get(k, None) for k in TABLE_COLS}
-    payload["user_id"] = user["id"]
-    return payload
-
 def do_upserts(rows_insert: List[Dict[str, Any]], rows_replace: List[Tuple[int, Dict[str, Any]]], rows_combine: List[Tuple[int, Dict[str, Any]]]):
-    """
-    rows_insert: list of brand-new payloads
-    rows_replace: list of (db_id, payload_full) to overwrite record
-    rows_combine: list of (db_id, payload_partial) where we fill only missing/nulls in DB
-    """
     # INSERT / UPSERT by unique (user_id, activity_id) when activity_id present
     if rows_insert:
-        sb.table("strava_import").upsert(rows_insert, on_conflict="user_id,activity_id").execute()
+        safe_rows = [_json_safe_row(r) for r in rows_insert]
+        sb.table("strava_import").upsert(safe_rows, on_conflict="user_id,activity_id").execute()
 
-    # REPLACE: overwrite all editable columns
+    # REPLACE
     for db_id, payload in rows_replace:
-        sb.table("strava_import").update(payload).eq("id", db_id).eq("user_id", user["id"]).execute()
+        safe = _json_safe_row(payload)
+        sb.table("strava_import").update(safe).eq("id", db_id).eq("user_id", user["id"]).execute()
 
-    # COMBINE: only set columns where DB is null (client-side)
+    # COMBINE
     for db_id, payload in rows_combine:
         curr = sb.table("strava_import").select("*").eq("id", db_id).single().execute().data
         if not curr:
@@ -190,10 +220,10 @@ def do_upserts(rows_insert: List[Dict[str, Any]], rows_replace: List[Tuple[int, 
                 continue
             if k not in TABLE_COLS:
                 continue
-            if (curr.get(k) is None) and (v is not None and v != ""):
+            if (curr.get(k) is None) and (v is not None and v != "" and not (isinstance(v, float) and pd.isna(v))):
                 to_set[k] = v
         if to_set:
-            sb.table("strava_import").update(to_set).eq("id", db_id).eq("user_id", user["id"]).execute()
+            sb.table("strava_import").update(_json_safe_row(to_set)).eq("id", db_id).eq("user_id", user["id"]).execute()
 
 # =========================
 # Parsing + détection doublons
@@ -209,7 +239,7 @@ if up:
     # Remap colonnes spéciales
     df = df.rename(columns={k: v for k, v in SPECIAL_HEADER_MAP.items() if k in df.columns})
 
-    # On garde uniquement les colonnes connues de la table + on ajoute celles manquantes en None
+    # On garde uniquement les colonnes connues + on ajoute celles manquantes en None
     for col in TABLE_COLS:
         if col not in df.columns:
             df[col] = None
@@ -227,7 +257,7 @@ if up:
             "recovery","with_pet","competition","long_run","for_a_cause","media_text"]
     df = df[keep]
 
-    # Typage
+    # Typage Strava -> types DB
     for c in BOOL_COLS:
         if c in df.columns:
             df[c] = df[c].map(_to_bool)
@@ -243,6 +273,9 @@ if up:
     for c in TS_COLS:
         if c in df.columns:
             df[c] = df[c].map(_to_timestamptz)
+
+    # Dernier filet de sécurité: remplacer tout NaN/NaT par None
+    df = df.where(pd.notna(df), None)
 
     # Bornes temporelles pour récupérer les potentiels doublons
     try:
@@ -297,22 +330,21 @@ if up:
     if not duplicate_found:
         insert_payloads: List[Dict[str, Any]] = []
         for (i, new_row, _) in rows_to_show:
-            payload = {k: new_row.get(k, None) for k in TABLE_COLS}
+            payload = {k: (None if (k not in new_row or pd.isna(new_row.get(k))) else new_row.get(k)) for k in TABLE_COLS}
             payload["user_id"] = user["id"]
-            insert_payloads.append(payload)
+            insert_payloads.append(_json_safe_row(payload))
 
         try:
-            # upsert sur (user_id, activity_id) si activity_id présent
             do_upserts(insert_payloads, rows_replace=[], rows_combine=[])
             st.success(f"Import terminé ✅  | Insérés: {len(insert_payloads)}")
             st.balloons()
             with st.expander("Aperçu (premières lignes importées)", expanded=False):
-                st.dataframe(pd.DataFrame([p for p in insert_payloads]).head(10))
+                st.dataframe(pd.DataFrame(insert_payloads).head(10))
         except Exception as e:
             st.error(f"Erreur pendant l'import : {e}")
 
     # =========================
-    # CAS 2 — Au moins un doublon: montrer l'UI de décision (inchangé)
+    # CAS 2 — Au moins un doublon: montrer l'UI de décision
     # =========================
     else:
         with st.expander("Aperçu rapide du parsing (premières lignes)", expanded=False):
@@ -320,7 +352,6 @@ if up:
 
         st.subheader("Vérification des doublons et choix d’action")
 
-        # Boutons globaux
         with global_action_col:
             st.write("Actions globales :")
             c1, c2, c3, c4 = st.columns(4)
@@ -339,7 +370,6 @@ if up:
 
         st.markdown("---")
 
-        # Liste détaillée : DB au-dessus / Import en dessous
         insert_payloads: List[Dict[str, Any]] = []
         replace_payloads: List[Tuple[int, Dict[str, Any]]] = []
         combine_payloads: List[Tuple[int, Dict[str, Any]]] = []
@@ -347,16 +377,18 @@ if up:
         for (i, new_row, existing_row) in rows_to_show:
             box = st.container(border=True)
             with box:
-                # En-tête + choix
                 left, right = st.columns([3,2])
-                date_lbl = pd.to_datetime(new_row.get("activity_date")).strftime("%Y-%m-%d %H:%M") if new_row.get("activity_date") else "?"
+                date_lbl = ""
+                try:
+                    date_lbl = pd.to_datetime(new_row.get("activity_date")).strftime("%Y-%m-%d %H:%M")
+                except Exception:
+                    date_lbl = "?"
+
                 with left:
                     st.markdown(f"### {new_row.get('activity_name') or 'Activité'} — {date_lbl}")
                     st.caption(f"Type: {new_row.get('activity_type') or '-'} | Distance: {new_row.get('distance')} km | D+: {new_row.get('elevation_gain')} m | D-: {new_row.get('elevation_loss')} m")
                 with right:
-                    default_choice = st.session_state.import_decisions.get(i)
-                    if not default_choice:
-                        default_choice = "replace" if existing_row else "insert"
+                    default_choice = st.session_state.import_decisions.get(i) or ("replace" if existing_row else "insert")
                     choice = st.radio(
                         f"Action pour la ligne #{i}",
                         options=["combine","replace","ignore","insert"],
@@ -370,7 +402,6 @@ if up:
                     )
                     st.session_state.import_decisions[i] = choice
 
-                # Affichage DB vs Import (DB au-dessus; Import en dessous)
                 if existing_row:
                     st.write("**Dans la base (potentiel doublon):**")
                     cdb1, cdb2, cdb3, cdb4 = st.columns(4)
@@ -388,9 +419,9 @@ if up:
                 cnp3.write(f"Dist (km): {new_row.get('distance')}")
                 cnp4.write(f"D+ / D-: {new_row.get('elevation_gain')} / {new_row.get('elevation_loss')}")
 
-                # Préparer payloads en fonction du choix
-                payload = {k: new_row.get(k, None) for k in TABLE_COLS}
+                payload = {k: (None if (k not in new_row or pd.isna(new_row.get(k))) else new_row.get(k)) for k in TABLE_COLS}
                 payload["user_id"] = user["id"]
+                payload = _json_safe_row(payload)
 
                 if choice == "insert" and not existing_row:
                     insert_payloads.append(payload)
@@ -398,11 +429,9 @@ if up:
                     replace_payloads.append((existing_row["id"], payload.copy()))
                 elif choice == "combine" and existing_row:
                     combine_payloads.append((existing_row["id"], payload))
-                # ignore => rien
 
                 st.markdown("---")
 
-        # Bouton "Appliquer"
         with apply_col:
             if st.button("Appliquer les actions", type="primary", use_container_width=True):
                 try:

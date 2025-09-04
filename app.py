@@ -1,3 +1,15 @@
+# 1) Masquer le libellé par défaut ("app") au-dessus du menu des pages
+st.markdown("""
+<style>
+/* Cache la ligne de titre auto du nav latéral (celle qui montre "app") */
+div[data-testid="stSidebarNav"] > div:first-child { display: none !important; }
+</style>
+""", unsafe_allow_html=True)
+
+# 2) Afficher ton propre titre "Accueil" au même endroit visuellement
+with st.sidebar:
+    st.title("Accueil")
+
 import streamlit as st
 from supa import get_client
 from utils import require_login, logout  # <-- plus de set_cookie/del_cookie

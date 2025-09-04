@@ -2,7 +2,7 @@ import streamlit as st
 from supa import get_client
 from utils import require_login, logout  # <-- plus de set_cookie/del_cookie
 
-st.set_page_config(page_title="Training App", layout="wide")
+st.set_page_config(page_title="Trail Tracker", layout="wide")
 
 # ---- Boot / client Supabase + login obligatoire ----
 sb = get_client()

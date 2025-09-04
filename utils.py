@@ -148,3 +148,32 @@ def logout(sb):
         _del_cookie(COOKIE_NAME)
     except Exception:
         pass
+
+def sidebar_logout_bottom(sb, label: str = "Se déconnecter"):
+    """Affiche un bouton de déconnexion tout en bas de la barre latérale."""
+    # Injecter le CSS une seule fois
+    if not st.session_state.get("_sidebar_footer_css", False):
+        st.markdown(
+            """
+            <style>
+            /* Transforme le contenu du sidebar en flex-col pleine hauteur */
+            div[data-testid="stSidebar"] > div {
+                display: flex;
+                flex-direction: column;
+                height: 100%;
+            }
+            /* Le footer sera poussé en bas */
+            .sidebar-footer { margin-top: auto; }
+            </style>
+            """,
+            unsafe_allow_html=True,
+        )
+        st.session_state["_sidebar_footer_css"] = True
+
+    with st.sidebar:
+        st.markdown('<div class="sidebar-footer">', unsafe_allow_html=True)
+        if st.button(label, use_container_width=True, key="logout_sidebar_bottom"):
+            logout(sb)
+            st.rerun()
+        st.markdown('</div>', unsafe_allow_html=True)
+

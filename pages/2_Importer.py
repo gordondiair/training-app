@@ -1,5 +1,6 @@
 # pages/02_Importer.py
 import io
+import re
 import math
 import unicodedata
 from datetime import datetime, timezone
@@ -15,8 +16,26 @@ from utils import sidebar_logout_bottom
 st.set_page_config(page_title="Importer — Strava", layout="wide")
 
 # =========================
-# Helpers de normalisation
+# Helpers
 # =========================
+_NUMERIC_STR_RE = re.compile(r'^[+-]?\d+(\.\d+)?$')
+
+def _looks_numeric_str(s: Any) -> bool:
+    return isinstance(s, str) and _NUMERIC_STR_RE.match(s.strip()) is not None
+
+def _coerce_numeric_str_any(s: Any):
+    """Si s est '7.0'/'7'/'-3.50', renvoie int ou float. Sinon renvoie s inchangé."""
+    if not _looks_numeric_str(s):
+        return s
+    try:
+        f = float(s.strip())
+    except Exception:
+        return s
+    # 7.0 -> 7
+    if math.isfinite(f) and float(f).is_integer():
+        return int(f)
+    return f if math.isfinite(f) else None
+
 def _snake(s: str) -> str:
     if s is None:
         return s
@@ -40,11 +59,11 @@ def _to_bool(x):
     return None
 
 def _to_int(x):
-    """Retourne int ou None, accepte '7', '7.0', 7.0, etc."""
     if x is None or (isinstance(x, float) and pd.isna(x)) or str(x).strip() == "":
         return None
+    # S'il arrive en str "7.0", convertissons proprement
+    x = _coerce_numeric_str_any(x)
     try:
-        # Si chaîne du style "7.0", int(float(...)) => 7
         return int(x)
     except Exception:
         try:
@@ -53,14 +72,13 @@ def _to_int(x):
             return None
 
 def _to_float(x):
-    """Retourne float ou None, supprime NaN/Inf."""
     if x is None or (isinstance(x, float) and pd.isna(x)) or str(x).strip() == "":
         return None
+    # Convertir "7.0" -> 7.0
+    x = _coerce_numeric_str_any(x)
     try:
         v = float(x)
-        if not math.isfinite(v):
-            return None
-        return v
+        return v if math.isfinite(v) else None
     except Exception:
         return None
 
@@ -114,7 +132,7 @@ def _json_safe_row(d: Dict[str, Any]) -> Dict[str, Any]:
     return {k: _json_safe_value(v) for k, v in d.items()}
 
 # =========================
-# Schéma de la table
+# Schéma / Types
 # =========================
 TABLE_COLS = [
     "activity_id","activity_date","activity_name","activity_type","activity_description",
@@ -149,14 +167,13 @@ BOOL_COLS = {"commute","prefer_perceived_exertion","commute_1","from_upload","fl
 INT_COLS  = {"elapsed_time","activity_id","uphill_time","downhill_time","other_time","power_count","perceived_relative_effort","relative_effort_1","number_of_runs","jump_count","total_cycles","timer_time","max_heart_rate_1","average_heart_rate","total_steps"}
 TIME_COLS = {"start_time","sunrise_time","sunset_time"}
 TS_COLS   = {"activity_date","weather_observation_time"}
-# tout le reste numérique = float
 FLOAT_COLS = set(TABLE_COLS) - BOOL_COLS - INT_COLS - TIME_COLS - TS_COLS - {
     "type_text","activity_name","activity_type","activity_description","activity_private_note",
     "activity_gear","filename","weather_condition","bike_text","gear_text","precipitation_type","media_text"
 }
 TEXT_COLS = set(TABLE_COLS) - (BOOL_COLS | INT_COLS | TIME_COLS | TS_COLS | FLOAT_COLS)
 
-# Carte des convertisseurs par colonne
+# Convertisseurs par colonne
 CONVERTER_BY_COL: Dict[str, Any] = {}
 for c in BOOL_COLS:  CONVERTER_BY_COL[c] = _to_bool
 for c in INT_COLS:   CONVERTER_BY_COL[c] = _to_int
@@ -165,13 +182,13 @@ for c in TIME_COLS:  CONVERTER_BY_COL[c] = _to_time
 for c in TS_COLS:    CONVERTER_BY_COL[c] = _to_timestamptz
 for c in TEXT_COLS:  CONVERTER_BY_COL[c] = lambda x: None if (x is None or (isinstance(x, float) and pd.isna(x)) or str(x).strip()=="") else str(x)
 
-# Règles de doublons (km_only + D+ / D- proches)
+# Tolerances doublons
 D_TOL_KM   = 0.2
 DPLUS_TOL  = 50.0
 DMOINS_TOL = 50.0
 
 # =========================
-# Auth + client
+# Auth
 # =========================
 sb = get_client()
 u = require_login(sb)
@@ -182,7 +199,7 @@ st.title("📥 Importer — Strava (CSV)")
 sidebar_logout_bottom(sb)
 
 # =========================
-# UI — uploader
+# UI
 # =========================
 st.markdown("Charge ton fichier **activities.csv** exporté depuis Strava.")
 up = st.file_uploader("Déposer le CSV Strava", type=["csv"], accept_multiple_files=False)
@@ -192,7 +209,7 @@ if "import_decisions" not in st.session_state:
     st.session_state.import_decisions = {}
 
 # =========================
-# DB
+# DB I/O
 # =========================
 def fetch_existing_rows(min_dt_iso: str, max_dt_iso: str) -> List[Dict[str, Any]]:
     sel_cols = ["id","user_id","activity_id","activity_date","activity_name","activity_type","distance","elevation_gain","elevation_loss","moving_time"]
@@ -206,21 +223,40 @@ def fetch_existing_rows(min_dt_iso: str, max_dt_iso: str) -> List[Dict[str, Any]
     return res.data or []
 
 def _finalize_payload(row_dict: Dict[str, Any]) -> Dict[str, Any]:
-    """Coerce fort par colonne + JSON-safe."""
-    payload = {}
+    """
+    1) Conversion par colonne (bool/int/float/time/ts/text)
+    2) Coercition universelle des chaînes numériques restantes
+    3) Re-forçage INT: si valeur numérique non-entière envoyée en INT -> int(float(...))
+    4) JSON safe
+    """
+    payload: Dict[str, Any] = {}
     for k in TABLE_COLS:
         conv = CONVERTER_BY_COL.get(k, lambda x: x)
-        payload[k] = conv(row_dict.get(k, None))
+        v = conv(row_dict.get(k, None))
+
+        # (2) convertir toute chaîne "7.0" restante en nombre
+        v = _coerce_numeric_str_any(v)
+
+        # (3) pour les colonnes INT, si on a encore un float -> cast int
+        if k in INT_COLS:
+            if isinstance(v, float) and math.isfinite(v):
+                v = int(v)
+            elif isinstance(v, str) and _looks_numeric_str(v):
+                try:
+                    v = int(float(v))
+                except Exception:
+                    v = None
+
+        payload[k] = v
+
     payload["user_id"] = user["id"]
     return _json_safe_row(payload)
 
 def do_upserts(rows_insert: List[Dict[str, Any]], rows_replace: List[Tuple[int, Dict[str, Any]]], rows_combine: List[Tuple[int, Dict[str, Any]]]):
     if rows_insert:
         sb.table("strava_import").upsert(rows_insert, on_conflict="user_id,activity_id").execute()
-
     for db_id, payload in rows_replace:
         sb.table("strava_import").update(payload).eq("id", db_id).eq("user_id", user["id"]).execute()
-
     for db_id, payload in rows_combine:
         curr = sb.table("strava_import").select("*").eq("id", db_id).single().execute().data
         if not curr:
@@ -237,7 +273,7 @@ def do_upserts(rows_insert: List[Dict[str, Any]], rows_replace: List[Tuple[int, 
             sb.table("strava_import").update(_json_safe_row(to_set)).eq("id", db_id).eq("user_id", user["id"]).execute()
 
 # =========================
-# Parsing + doublons
+# Import
 # =========================
 if up:
     raw = up.read()
@@ -251,16 +287,19 @@ if up:
     for col in TABLE_COLS:
         if col not in df.columns:
             df[col] = None
-    keep = TABLE_COLS.copy()
-    df = df[keep]
+    df = df[TABLE_COLS]
 
-    # typage au niveau DataFrame (optionnel mais utile pour l'aperçu)
+    # typage au niveau DF (facultatif)
     for c in df.columns:
         conv = CONVERTER_BY_COL.get(c)
         if conv:
             df[c] = df[c].map(conv)
 
-    # sécurité NaN -> None
+    # convertir les chaînes numériques résiduelles (universel)
+    for c in df.columns:
+        df[c] = df[c].map(_coerce_numeric_str_any)
+
+    # NaN -> None
     df = df.where(pd.notna(df), None)
 
     # fenêtre temporelle
@@ -287,21 +326,21 @@ if up:
         d = _date_only(r.get("activity_date"))
         by_day.setdefault(d, []).append(r)
 
-    # détection doublons
+    # doublons
     rows_to_show = []
     duplicate_found = False
     for idx, row in df.iterrows():
         d_day = _date_only(row.get("activity_date"))
         dist_km_new = _to_float(row.get("distance")) or 0.0
-        dplus_new = _to_float(row.get("elevation_gain")) or 0.0
-        dmoins_new = _to_float(row.get("elevation_loss")) or 0.0
+        dplus_new   = _to_float(row.get("elevation_gain")) or 0.0
+        dmoins_new  = _to_float(row.get("elevation_loss")) or 0.0
 
         candidates = by_day.get(d_day, [])
         match = None
         for cand in candidates:
             dist_km_old = _to_float(cand.get("distance")) or 0.0
-            dplus_old = _to_float(cand.get("elevation_gain")) or 0.0
-            dmoins_old = _to_float(cand.get("elevation_loss")) or 0.0
+            dplus_old   = _to_float(cand.get("elevation_gain")) or 0.0
+            dmoins_old  = _to_float(cand.get("elevation_loss")) or 0.0
             if abs(dist_km_new - dist_km_old) <= D_TOL_KM and abs(dplus_new - dplus_old) <= DPLUS_TOL and abs(dmoins_new - dmoins_old) <= DMOINS_TOL:
                 match = cand
                 duplicate_found = True
@@ -309,7 +348,7 @@ if up:
 
         rows_to_show.append((idx, row.to_dict(), match))
 
-    # ============ CAS 1 — aucun doublon: import silencieux ============
+    # ===== Aucun doublon -> import silencieux =====
     if not duplicate_found:
         insert_payloads: List[Dict[str, Any]] = []
         for (_, new_row, _) in rows_to_show:
@@ -323,9 +362,17 @@ if up:
             with st.expander("Aperçu (premières lignes importées)", expanded=False):
                 st.dataframe(pd.DataFrame(insert_payloads).head(10))
         except Exception as e:
+            # mini diagnostic utile
             st.error(f"Erreur pendant l'import : {e}")
+            with st.expander("Diagnostic rapide"):
+                bad_cols = []
+                for k in TABLE_COLS:
+                    # Cherche des valeurs texte numériques restantes
+                    if any(_looks_numeric_str(x) for x in pd.Series([r.get(k) for _, r, _ in rows_to_show])):
+                        bad_cols.append(k)
+                st.write("Colonnes contenant encore des *chaînes* numériques potentielles :", bad_cols)
 
-    # ============ CAS 2 — doublons: UI de décision ============
+    # ===== Doublons -> UI décisions =====
     else:
         with st.expander("Aperçu rapide du parsing (premières lignes)", expanded=False):
             st.dataframe(df.head(10))
@@ -352,7 +399,7 @@ if up:
 
         insert_payloads: List[Dict[str, Any]] = []
         replace_payloads: List[Tuple[int, Dict[str, Any]]] = []
-        combine_payloads: List[Tuple[int, Dict[str, Any]]] = []
+        combine_payloads: List[Tuple[int, Dict[str, Any]] ] = []
 
         for (i, new_row, existing_row) in rows_to_show:
             box = st.container(border=True)

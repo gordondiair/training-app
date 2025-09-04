@@ -106,7 +106,6 @@ TABLE_COLS = [
 ]
 
 # Mapping "en-têtes Strava" -> "colonne SQL"
-# (on passe tout en snake_case donc ici on remappe juste les cas spéciaux/renommés)
 SPECIAL_HEADER_MAP = {
     "type": "type_text",
     "media": "media_text",
@@ -180,9 +179,8 @@ def do_upserts(rows_insert: List[Dict[str, Any]], rows_replace: List[Tuple[int, 
     for db_id, payload in rows_replace:
         sb.table("strava_import").update(payload).eq("id", db_id).eq("user_id", user["id"]).execute()
 
-    # COMBINE: only set columns where DB is null (server-side logic via COALESCE is nicer, but we do client-side)
+    # COMBINE: only set columns where DB is null (client-side)
     for db_id, payload in rows_combine:
-        # fetch current
         curr = sb.table("strava_import").select("*").eq("id", db_id).single().execute().data
         if not curr:
             continue
@@ -251,7 +249,6 @@ if up:
         min_dt = pd.to_datetime(df["activity_date"]).min()
         max_dt = pd.to_datetime(df["activity_date"]).max()
         if pd.isna(min_dt) or pd.isna(max_dt):
-            # fallback: élargir une fenêtre
             min_dt = pd.Timestamp.utcnow() - pd.Timedelta(days=3650)
             max_dt = pd.Timestamp.utcnow() + pd.Timedelta(days=1)
     except Exception:
@@ -272,10 +269,9 @@ if up:
         d = _date_only(r.get("activity_date"))
         by_day.setdefault(d, []).append(r)
 
-    # Détection doublons selon règles: même jour ET km/d+/d- proches
-    # Hypothèse: CSV Strava "distance" est en **km_only** (on a convenu plus tôt).
-    decisions_ui = []
+    # Détection doublons: même jour + km/d+/d- proches (CSV Strava en km_only)
     rows_to_show = []
+    duplicate_found = False
     for idx, row in df.iterrows():
         d_day = _date_only(row.get("activity_date"))
         dist_km_new = _to_float(row.get("distance")) or 0.0
@@ -290,113 +286,134 @@ if up:
             dmoins_old = _to_float(cand.get("elevation_loss")) or 0.0
             if abs(dist_km_new - dist_km_old) <= D_TOL_KM and abs(dplus_new - dplus_old) <= DPLUS_TOL and abs(dmoins_new - dmoins_old) <= DMOINS_TOL:
                 match = cand
+                duplicate_found = True
                 break
 
         rows_to_show.append((idx, row.to_dict(), match))
 
     # =========================
-    # UI — décisions
+    # CAS 1 — Aucun doublon détecté: import silencieux immédiat
     # =========================
-    with st.expander("Aperçu rapide du parsing (premières lignes)", expanded=False):
-        st.dataframe(df.head(10))
-
-    st.subheader("Vérification des doublons et choix d’action")
-
-    # Boutons globaux
-    with global_action_col:
-        st.write("Actions globales :")
-        c1, c2, c3, c4 = st.columns(4)
-        if c1.button("Tout combiner"):
-            for (i, _, m) in rows_to_show:
-                st.session_state.import_decisions[i] = "combine" if m else "insert"
-        if c2.button("Tout remplacer"):
-            for (i, _, m) in rows_to_show:
-                st.session_state.import_decisions[i] = "replace" if m else "insert"
-        if c3.button("Tout ignorer"):
-            for (i, _, m) in rows_to_show:
-                st.session_state.import_decisions[i] = "ignore"
-        if c4.button("Tout insérer quand même"):
-            for (i, _, m) in rows_to_show:
-                st.session_state.import_decisions[i] = "insert"
-
-    st.markdown("---")
-
-    # Liste détaillée : DB au-dessus / Import en dessous
-    insert_payloads: List[Dict[str, Any]] = []
-    replace_payloads: List[Tuple[int, Dict[str, Any]]] = []
-    combine_payloads: List[Tuple[int, Dict[str, Any]]] = []
-
-    for (i, new_row, existing_row) in rows_to_show:
-        box = st.container(border=True)
-        with box:
-            # En-tête + choix
-            left, right = st.columns([3,2])
-            date_lbl = pd.to_datetime(new_row.get("activity_date")).strftime("%Y-%m-%d %H:%M") if new_row.get("activity_date") else "?"
-            with left:
-                st.markdown(f"### {new_row.get('activity_name') or 'Activité'} — {date_lbl}")
-                st.caption(f"Type: {new_row.get('activity_type') or '-'} | Distance: {new_row.get('distance')} km | D+: {new_row.get('elevation_gain')} m | D-: {new_row.get('elevation_loss')} m")
-            with right:
-                default_choice = st.session_state.import_decisions.get(i)
-                if not default_choice:
-                    default_choice = "replace" if existing_row else "insert"
-                choice = st.radio(
-                    f"Action pour la ligne #{i}",
-                    options=["combine","replace","ignore","insert"],
-                    captions=["Compléter la ligne DB avec les infos manquantes du CSV",
-                              "Remplacer entièrement la ligne DB par le CSV",
-                              "Ignorer cette ligne",
-                              "Insérer une nouvelle ligne quand même"],
-                    index=["combine","replace","ignore","insert"].index(default_choice),
-                    key=f"choice_{i}",
-                    horizontal=True
-                )
-                st.session_state.import_decisions[i] = choice
-
-            # Affichage DB vs Import (DB au-dessus; Import en dessous)
-            if existing_row:
-                st.write("**Dans la base (potentiel doublon):**")
-                cdb1, cdb2, cdb3, cdb4 = st.columns(4)
-                cdb1.write(f"ID: `{existing_row['id']}`")
-                cdb2.write(f"Date: {existing_row.get('activity_date')}")
-                cdb3.write(f"Dist (km): {existing_row.get('distance')}")
-                cdb4.write(f"D+ / D-: {existing_row.get('elevation_gain')} / {existing_row.get('elevation_loss')}")
-            else:
-                st.info("Aucune ligne existante trouvée pour cette date/valeurs.")
-
-            st.write("**Ligne importée (CSV):**")
-            cnp1, cnp2, cnp3, cnp4 = st.columns(4)
-            cnp1.write(f"Activity ID: {new_row.get('activity_id')}")
-            cnp2.write(f"Date: {new_row.get('activity_date')}")
-            cnp3.write(f"Dist (km): {new_row.get('distance')}")
-            cnp4.write(f"D+ / D-: {new_row.get('elevation_gain')} / {new_row.get('elevation_loss')}")
-
-            # Préparer payloads en fonction du choix
-            payload = {}
-            for k in TABLE_COLS:
-                payload[k] = new_row.get(k, None)
+    if not duplicate_found:
+        insert_payloads: List[Dict[str, Any]] = []
+        for (i, new_row, _) in rows_to_show:
+            payload = {k: new_row.get(k, None) for k in TABLE_COLS}
             payload["user_id"] = user["id"]
+            insert_payloads.append(payload)
 
-            if choice == "insert" and not existing_row:
-                insert_payloads.append(payload)
-            elif choice == "replace" and existing_row:
-                # on remplace tout (sauf id)
-                full = payload.copy()
-                replace_payloads.append((existing_row["id"], full))
-            elif choice == "combine" and existing_row:
-                combine_payloads.append((existing_row["id"], payload))
-            # ignore => rien
+        try:
+            # upsert sur (user_id, activity_id) si activity_id présent
+            do_upserts(insert_payloads, rows_replace=[], rows_combine=[])
+            st.success(f"Import terminé ✅  | Insérés: {len(insert_payloads)}")
+            st.balloons()
+            with st.expander("Aperçu (premières lignes importées)", expanded=False):
+                st.dataframe(pd.DataFrame([p for p in insert_payloads]).head(10))
+        except Exception as e:
+            st.error(f"Erreur pendant l'import : {e}")
 
-            st.markdown("---")
+    # =========================
+    # CAS 2 — Au moins un doublon: montrer l'UI de décision (inchangé)
+    # =========================
+    else:
+        with st.expander("Aperçu rapide du parsing (premières lignes)", expanded=False):
+            st.dataframe(df.head(10))
 
-    # Bouton "Appliquer"
-    with apply_col:
-        if st.button("Appliquer les actions", type="primary", use_container_width=True):
-            try:
-                do_upserts(insert_payloads, replace_payloads, combine_payloads)
-                st.success(f"Import terminé ✅  | Insérés: {len(insert_payloads)}  •  Remplacés: {len(replace_payloads)}  •  Combinés: {len(combine_payloads)}  •  Ignorés: {len(rows_to_show) - (len(insert_payloads)+len(replace_payloads)+len(combine_payloads))}")
-                st.balloons()
-            except Exception as e:
-                st.error(f"Erreur pendant l'import : {e}")
+        st.subheader("Vérification des doublons et choix d’action")
+
+        # Boutons globaux
+        with global_action_col:
+            st.write("Actions globales :")
+            c1, c2, c3, c4 = st.columns(4)
+            if c1.button("Tout combiner"):
+                for (i, _, m) in rows_to_show:
+                    st.session_state.import_decisions[i] = "combine" if m else "insert"
+            if c2.button("Tout remplacer"):
+                for (i, _, m) in rows_to_show:
+                    st.session_state.import_decisions[i] = "replace" if m else "insert"
+            if c3.button("Tout ignorer"):
+                for (i, _, m) in rows_to_show:
+                    st.session_state.import_decisions[i] = "ignore"
+            if c4.button("Tout insérer quand même"):
+                for (i, _, m) in rows_to_show:
+                    st.session_state.import_decisions[i] = "insert"
+
+        st.markdown("---")
+
+        # Liste détaillée : DB au-dessus / Import en dessous
+        insert_payloads: List[Dict[str, Any]] = []
+        replace_payloads: List[Tuple[int, Dict[str, Any]]] = []
+        combine_payloads: List[Tuple[int, Dict[str, Any]]] = []
+
+        for (i, new_row, existing_row) in rows_to_show:
+            box = st.container(border=True)
+            with box:
+                # En-tête + choix
+                left, right = st.columns([3,2])
+                date_lbl = pd.to_datetime(new_row.get("activity_date")).strftime("%Y-%m-%d %H:%M") if new_row.get("activity_date") else "?"
+                with left:
+                    st.markdown(f"### {new_row.get('activity_name') or 'Activité'} — {date_lbl}")
+                    st.caption(f"Type: {new_row.get('activity_type') or '-'} | Distance: {new_row.get('distance')} km | D+: {new_row.get('elevation_gain')} m | D-: {new_row.get('elevation_loss')} m")
+                with right:
+                    default_choice = st.session_state.import_decisions.get(i)
+                    if not default_choice:
+                        default_choice = "replace" if existing_row else "insert"
+                    choice = st.radio(
+                        f"Action pour la ligne #{i}",
+                        options=["combine","replace","ignore","insert"],
+                        captions=["Compléter la ligne DB avec les infos manquantes du CSV",
+                                  "Remplacer entièrement la ligne DB par le CSV",
+                                  "Ignorer cette ligne",
+                                  "Insérer une nouvelle ligne quand même"],
+                        index=["combine","replace","ignore","insert"].index(default_choice),
+                        key=f"choice_{i}",
+                        horizontal=True
+                    )
+                    st.session_state.import_decisions[i] = choice
+
+                # Affichage DB vs Import (DB au-dessus; Import en dessous)
+                if existing_row:
+                    st.write("**Dans la base (potentiel doublon):**")
+                    cdb1, cdb2, cdb3, cdb4 = st.columns(4)
+                    cdb1.write(f"ID: `{existing_row['id']}`")
+                    cdb2.write(f"Date: {existing_row.get('activity_date')}")
+                    cdb3.write(f"Dist (km): {existing_row.get('distance')}")
+                    cdb4.write(f"D+ / D-: {existing_row.get('elevation_gain')} / {existing_row.get('elevation_loss')}")
+                else:
+                    st.info("Aucune ligne existante trouvée pour cette date/valeurs.")
+
+                st.write("**Ligne importée (CSV):**")
+                cnp1, cnp2, cnp3, cnp4 = st.columns(4)
+                cnp1.write(f"Activity ID: {new_row.get('activity_id')}")
+                cnp2.write(f"Date: {new_row.get('activity_date')}")
+                cnp3.write(f"Dist (km): {new_row.get('distance')}")
+                cnp4.write(f"D+ / D-: {new_row.get('elevation_gain')} / {new_row.get('elevation_loss')}")
+
+                # Préparer payloads en fonction du choix
+                payload = {k: new_row.get(k, None) for k in TABLE_COLS}
+                payload["user_id"] = user["id"]
+
+                if choice == "insert" and not existing_row:
+                    insert_payloads.append(payload)
+                elif choice == "replace" and existing_row:
+                    replace_payloads.append((existing_row["id"], payload.copy()))
+                elif choice == "combine" and existing_row:
+                    combine_payloads.append((existing_row["id"], payload))
+                # ignore => rien
+
+                st.markdown("---")
+
+        # Bouton "Appliquer"
+        with apply_col:
+            if st.button("Appliquer les actions", type="primary", use_container_width=True):
+                try:
+                    do_upserts(insert_payloads, replace_payloads, combine_payloads)
+                    st.success(
+                        f"Import terminé ✅  | Insérés: {len(insert_payloads)}  •  Remplacés: {len(replace_payloads)}  •  "
+                        f"Combinés: {len(combine_payloads)}  •  Ignorés: {len(rows_to_show) - (len(insert_payloads)+len(replace_payloads)+len(combine_payloads))}"
+                    )
+                    st.balloons()
+                except Exception as e:
+                    st.error(f"Erreur pendant l'import : {e}")
 
 else:
     st.info("Dépose un fichier CSV Strava pour commencer.")

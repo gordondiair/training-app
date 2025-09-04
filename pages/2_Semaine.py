@@ -2,6 +2,7 @@
 import streamlit as st
 from supa import get_client
 from utils import require_login
+from utils import side_bar_logout_button
 
 sb = get_client()
 u = require_login(sb)  # bloque la page tant que l'utilisateur n'est pas connecté
@@ -68,3 +69,5 @@ st.plotly_chart(fig, use_container_width=True)
 # 7) Tableau récap
 cols = ["week_key"] + list(metrics.values())
 st.dataframe(plot_df[cols], use_container_width=True)
+
+sidebar_logout_bottom(sb)

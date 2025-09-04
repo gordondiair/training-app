@@ -150,30 +150,52 @@ def logout(sb):
         pass
 
 def sidebar_logout_bottom(sb, label: str = "Se déconnecter"):
-    """Affiche un bouton de déconnexion tout en bas de la barre latérale."""
+    """Bouton de déconnexion FIXE tout en bas du sidebar, quelle que soit la page."""
     # Injecter le CSS une seule fois
-    if not st.session_state.get("_sidebar_footer_css", False):
+    if not st.session_state.get("_sidebar_footer_css_v2", False):
         st.markdown(
             """
             <style>
-            /* Transforme le contenu du sidebar en flex-col pleine hauteur */
-            div[data-testid="stSidebar"] > div {
-                display: flex;
-                flex-direction: column;
-                height: 100%;
+            /* Rendre le conteneur du sidebar positionnable */
+            section[data-testid="stSidebar"] { position: relative; }
+
+            /* Bouton fixé en bas du sidebar */
+            section[data-testid="stSidebar"] .sidebar-bottom {
+                position: fixed;
+                bottom: 12px;
+                left: 12px;               /* marge intérieure par défaut */
+                width: calc(18rem - 24px);/* largeur sidebar ~ 18rem - marges */
+                z-index: 1000;
             }
-            /* Le footer sera poussé en bas */
-            .sidebar-footer { margin-top: auto; }
+
+            /* Largeurs adaptatives selon thèmes/tailles */
+            @media (max-width: 991px) {
+              /* Sidebar en mode overlay sur petits écrans */
+              section[data-testid="stSidebar"] .sidebar-bottom {
+                  left: 16px;
+                  width: calc(100vw - 32px);
+              }
+            }
+
+            /* Fallback: si la largeur diffère, on tente via variable CSS (si présente) */
+            section[data-testid="stSidebar"] {
+                --sidebar-w: 18rem; /* valeur par défaut */
+            }
+            section[data-testid="stSidebar"] .sidebar-bottom.use-var {
+                width: calc(var(--sidebar-w) - 24px);
+            }
             </style>
             """,
             unsafe_allow_html=True,
         )
-        st.session_state["_sidebar_footer_css"] = True
+        st.session_state["_sidebar_footer_css_v2"] = True
 
     with st.sidebar:
-        st.markdown('<div class="sidebar-footer">', unsafe_allow_html=True)
-        if st.button(label, use_container_width=True, key="logout_sidebar_bottom"):
+        # Conteneur fixé en bas
+        st.markdown('<div class="sidebar-bottom">', unsafe_allow_html=True)
+        if st.button(label, use_container_width=True, key="logout_sidebar_fixed"):
             logout(sb)
             st.rerun()
         st.markdown('</div>', unsafe_allow_html=True)
+
 

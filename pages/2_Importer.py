@@ -134,7 +134,7 @@ st.session_state["user"] = {"id": u.user.id, "email": u.user.email}
 user = st.session_state["user"]
 
 st.title("📥 Importer — Strava (CSV)")
-sidebar_logout_bottom()
+sidebar_logout_bottom(sb)
 
 # =========================
 # UI — uploader

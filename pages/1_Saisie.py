@@ -1,3 +1,15 @@
+# --- Header commun à toutes les pages ---
+import streamlit as st
+from supa import get_client
+from utils import require_login  # ou restore_session si tu préfères gérer toi-même
+
+sb = get_client()
+u = require_login(sb)  # bloque la page tant que l'utilisateur n'est pas connecté
+
+# (Compat : si tes pages lisent st.session_state.user)
+st.session_state["user"] = {"id": u.user.id, "email": u.user.email}
+# --- Fin du header commun ---
+
 import streamlit as st
 from datetime import date
 from supa import get_client

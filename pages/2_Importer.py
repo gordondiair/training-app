@@ -284,6 +284,22 @@ if up:
     df.columns = [_snake(c) for c in df.columns]
     df = df.rename(columns={k: v for k, v in SPECIAL_HEADER_MAP.items() if k in df.columns})
 
+    # --- Filtrer uniquement les activités de course ---
+RUN_TYPES = {"run", "trail_run", "virtual_run"}  # ou {"run"} si tu veux strict
+if "activity_type" in df.columns:
+    df["__atype_norm"] = df["activity_type"].astype(str).map(_snake)
+    before = len(df)
+    df = df[df["__atype_norm"].isin(RUN_TYPES)].drop(columns=["__atype_norm"])
+    if len(df) == 0:
+        st.warning("Aucune activité de type course (run) trouvée dans ce CSV.")
+        st.stop()
+    else:
+        st.caption(f"Filtre 'run' appliqué : {len(df)}/{before} lignes conservées.")
+else:
+    st.warning("Colonne `activity_type` absente : impossible de filtrer les 'run'.")
+    st.stop()
+
+
     # aligner colonnes
     for col in TABLE_COLS:
         if col not in df.columns:

@@ -1,56 +1,77 @@
 import streamlit as st
 from supa import get_client
+from utils import restore_session, set_cookie, del_cookie
 
 st.set_page_config(page_title="Training App", layout="wide")
 
-def auth_block():
-    sb = get_client()
+# ---- Boot / client Supabase + restauration de session ----
+sb = get_client()
+restore_session(sb)  # <- restaure via session_state ou cookie si possible
 
-    # On mémorise l'utilisateur dans la session
-    if "user" not in st.session_state:
-        st.session_state.user = None
+# On garde une compatibilité avec tes pages qui lisent st.session_state.user
+def _sync_user_state():
+    u = sb.auth.get_user()
+    if u:
+        st.session_state["user"] = {"id": u.user.id, "email": u.user.email}
+    else:
+        st.session_state["user"] = None
+    return u
 
-    # Si déjà connecté
-    if st.session_state.user:
-        st.success(f"Connecté : {st.session_state.user['email']}")
-        if st.button("Se déconnecter"):
-            st.session_state.user = None
-            st.rerun()
-        return True
+u = _sync_user_state()
 
-    # Ecran de connexion / création de compte
+# ================================
+# UI non connecté : Login / Signup
+# ================================
+if not u:
     st.header("Connexion / Création de compte")
-    col1, col2 = st.columns(2)
+    tab_login, tab_signup = st.tabs(["Se connecter", "Créer un compte"])
 
-    with col1:
-        st.subheader("Se connecter")
+    with tab_login:
         email = st.text_input("Email", key="login_email")
-        pwd = st.text_input("Mot de passe", type="password", key="login_pwd")
+        pwd   = st.text_input("Mot de passe", type="password", key="login_pwd")
+        remember = st.checkbox("Se souvenir de moi", value=True)
         if st.button("Connexion"):
             try:
-                data = sb.auth.sign_in_with_password({"email": email, "password": pwd})
-                st.session_state.user = {"id": data.user.id, "email": data.user.email}
+                res = sb.auth.sign_in_with_password({"email": email, "password": pwd})
+                # mémorise session côté app
+                st.session_state["sb_session"] = res.session
+                # cookie "remember me"
+                if remember and res.session and res.session.refresh_token:
+                    set_cookie(res.session.refresh_token)
+                _sync_user_state()
                 st.rerun()
             except Exception as e:
                 st.error(f"Échec connexion : {e}")
 
-    with col2:
-        st.subheader("Créer un compte")
+    with tab_signup:
         email2 = st.text_input("Email", key="signup_email")
-        pwd2 = st.text_input("Mot de passe", type="password", key="signup_pwd")
+        pwd2   = st.text_input("Mot de passe", type="password", key="signup_pwd")
         if st.button("Créer mon compte"):
             try:
                 sb.auth.sign_up({"email": email2, "password": pwd2})
-                st.success("Compte créé. Vérifie tes emails puis connecte-toi.")
+                st.success("Compte créé. Vérifie tes emails, puis connecte-toi dans l’onglet 'Se connecter'.")
             except Exception as e:
                 st.error(f"Échec création : {e}")
 
-    return False
+    st.stop()  # tant qu'on n'est pas connecté, on n'affiche pas la suite
 
-# ---- Main ----
-if not auth_block():
-    st.stop()
+# ================================
+# UI connecté
+# ================================
+st.success(f"Connecté : {st.session_state.user['email']}")
 
+# Bouton logout (nettoie session + cookie)
+if st.button("Se déconnecter"):
+    try:
+        sb.auth.sign_out()
+    except Exception:
+        pass
+    del_cookie()
+    st.session_state.pop("sb_session", None)
+    st.session_state["user"] = None
+    st.rerun()
+
+# ---- Contenu d’accueil
 st.write("👈 Utilise le menu **Pages** (en haut à gauche) :")
 st.write("- **🏠 Saisie — Journal** : ajoute tes données")
 st.write("- **📊 Semaine — agrégats** : visualise les stats")

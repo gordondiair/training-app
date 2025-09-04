@@ -6,7 +6,6 @@ st.set_page_config(page_title="Training App", layout="wide")
 
 # ---- Boot / client Supabase + restauration de session ----
 sb = get_client()
-restore_session(sb)  # <- restaure via session_state ou cookie si possible
 
 # On garde une compatibilité avec tes pages qui lisent st.session_state.user
 def _sync_user_state():

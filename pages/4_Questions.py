@@ -8,6 +8,9 @@ u = require_login(sb)
 st.session_state["user"] = {"id": u.user.id, "email": u.user.email}
 # --- Fin du header commun ---
 
+# =========================
+# Imports
+# =========================
 import os, re, json
 from datetime import date
 from typing import Any, Dict, List, Optional, Tuple
@@ -17,6 +20,7 @@ import pandas as pd
 # =========================
 # PAGE
 # =========================
+st.set_page_config(page_title="🤖 Questions — strava_import", layout="wide")
 st.title("🤖 Questions (réponse en phrases) — strava_import")
 sidebar_logout_bottom(sb)
 
@@ -24,8 +28,10 @@ user = st.session_state.get("user")
 if not user:
     st.stop()
 
+OPENAI_API_KEY = st.secrets.get("OPENAI_API_KEY", os.getenv("OPENAI_API_KEY", ""))
+
 # =========================
-# Chargement: toute la table (toutes colonnes)
+# Helpers
 # =========================
 TABLE = "strava_import"
 
@@ -43,14 +49,18 @@ def load_table_df() -> pd.DataFrame:
     q = sb.table(TABLE).select("*").eq("user_id", user["id"])
     res = q.execute()
     df = pd.DataFrame(res.data or [])
-    if df.empty: return df
+    if df.empty:
+        return df
+    # snake_case safe
     rename = {c: snake(c) for c in df.columns}
     df = df.rename(columns=rename)
     # cast datetime
     for c in df.columns:
         if any(k in c for k in ["date","time","start","end","_at","_ts"]):
-            try: df[c] = pd.to_datetime(df[c], errors="coerce", utc=True)
-            except Exception: pass
+            try:
+                df[c] = pd.to_datetime(df[c], errors="coerce", utc=True)
+            except Exception:
+                pass
     # enrichir iso/week/mois/jour
     time_cols = [c for c in df.columns if pd.api.types.is_datetime64_any_dtype(df[c])]
     if time_cols:
@@ -64,14 +74,14 @@ def load_table_df() -> pd.DataFrame:
 
 df = load_table_df()
 if df.empty:
-    st.write("Je n’ai trouvé aucune activité dans ta table pour cet utilisateur.")
+    st.markdown("Je n’ai trouvé aucune activité dans ta table `strava_import` pour cet utilisateur.")
     st.stop()
 
-schema_detected = [{"name": c, "type": dtype_str(df[c])} for c in df.columns]
+# Colonnes numériques
 NUMERIC_COLS = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])]
 
 # =========================
-# Synonymes FR massifs -> colonnes existantes
+# Synonymes FR -> colonnes existantes (utilisé par l'agent)
 # =========================
 RAW_ALIASES: Dict[str, List[str]] = {
     "distance": ["distance", "km", "kilometres", "kilomètres", "kilométrage", "kms", "total km", "distance totale"],
@@ -96,9 +106,7 @@ RAW_ALIASES: Dict[str, List[str]] = {
     "activity_description": ["activity_description", "description", "note", "commentaire"],
     "activity_date": ["activity_date", "date", "jour", "date activité"],
     "filename": ["filename", "fichier", "nom de fichier"],
-    # rythme si dispo
     "avg_pace_min_per_km": ["avg_pace_min_per_km", "allure moyenne", "allure", "min/km", "min par km"],
-    # clés de regroupement temporel
     "iso_week": ["iso_week", "semaine", "num semaine", "sem"],
     "iso_year": ["iso_year", "année", "an", "year"],
     "month": ["month", "mois"],
@@ -111,129 +119,21 @@ for col, syns in ALIASES.items():
     for s in syns:
         SYN_TO_COL[s.lower()] = col
 
-def normalize_question_with_aliases(q: str) -> str:
-    qn = " " + q.lower() + " "
-    syns_sorted = sorted(SYN_TO_COL.keys(), key=len, reverse=True)
-    for syn in syns_sorted:
-        pattern = r"(?<![a-z0-9_])" + re.escape(syn) + r"(?![a-z0-9_])"
-        qn = re.sub(pattern, SYN_TO_COL[syn], qn, flags=re.IGNORECASE)
-    return qn.strip()
-
-# =========================
-# UI minimale: juste la question + une réponse texte
-# =========================
-txt_raw = st.text_input("Pose ta question (FR) :", placeholder="Ex: d+ moyen par semaine cette année")
-go = st.button("Envoyer")
-if not (txt_raw and go):
-    st.stop()
-
-txt = normalize_question_with_aliases(txt_raw)
-
-# =========================
-# LLM planificateur (JSON) — puis réponse en PHRASES
-# =========================
-OPENAI_API_KEY = st.secrets.get("OPENAI_API_KEY", os.getenv("OPENAI_API_KEY", ""))
-
-SYSTEM_PROMPT = """Tu es un planificateur analytique pour des données d'entraînement.
-Tu renvoies UNIQUEMENT un JSON valide (aucun texte autour).
-
-Format strict:
-{
-  "metric": { "op": "<sum|avg|max|min|count>", "column": "<colonne ou 'count'>" },
-  "filters": {
-    "year": 2025 | 2024 | null,
-    "weeks": { "from": 10, "to": 20 } | null,
-    "month": 1..12 | null,
-    "where": [
-      { "column": "<col>", "op": "<=|>=|=|!=|contains>", "value": "<valeur>" }
-    ] | []
-  },
-  "group_by": "week" | "month" | "day" | "none",
-  "natural_language_goal": "<paraphrase courte>"
-}
-
-Règles:
-- Utilise les colonnes disponibles. sum/avg/max/min sur numériques, sinon count.
-- “semaines X à Y” -> weeks={from:X,to:Y} et group_by="week".
-- “cette année” -> year = année courante.
-- “par mois” -> group_by="month" ; “par jour” -> group_by="day".
-- where[] pour activity_type = run, etc.
-"""
-
-def call_llm_plan(question: str) -> Optional[Dict[str, Any]]:
-    if not OPENAI_API_KEY:
-        return None
-    try:
-        from openai import OpenAI
-        client = OpenAI(api_key=OPENAI_API_KEY)
-        resp = client.chat.completions.create(
-            model="gpt-4o-mini",
-            temperature=0.0,
-            messages=[
-                {"role":"system","content":SYSTEM_PROMPT},
-                {"role":"user","content":json.dumps({"table":"strava_import","columns":schema_detected}, ensure_ascii=False)},
-                {"role":"user","content":question}
-            ],
-        )
-        raw = resp.choices[0].message.content.strip()
-        return json.loads(raw)
-    except Exception:
-        return None
-
-MONTHS = {
-    "janvier":1,"février":2,"fevrier":2,"mars":3,"avril":4,"mai":5,"juin":6,"juillet":7,
-    "août":8,"aout":8,"septembre":9,"octobre":10,"novembre":11,"décembre":12,"decembre":12
-}
-
-def regex_fallback(q: str) -> Dict[str, Any]:
-    ql = q.lower()
-    op = "avg" if re.search(r"\bmoyenn?e?\b", ql) else ("max" if "max" in ql else ("min" if "min" in ql else ("count" if "nombre" in ql or "compte" in ql else "sum")))
-    col = None
-    for c in df.columns:
-        if re.search(rf"(?<![a-z0-9_]){re.escape(c)}(?![a-z0-9_])", ql):
-            col = c; break
-    if col is None:
-        for pref in ["distance","elevation_gain","average_speed","average_heart_rate","moving_time","elapsed_time","calories","avg_pace_min_per_km"]:
-            if pref in df.columns: col = pref; break
-        if col is None:
-            col = NUMERIC_COLS[0] if NUMERIC_COLS else df.columns[0]
-    weeks = None
-    m = re.search(r"semaines?\s+(\d+)\s*[à\-]\s*(\d+)", ql)
-    if m: weeks = {"from": int(m.group(1)), "to": int(m.group(2))}
-    year = date.today().year if "cette année" in ql else (int(m2.group(1)) if (m2 := re.search(r"(20\d{2})", ql)) else None)
-    month = None
-    if (m3 := re.search(r"(janvier|février|fevrier|mars|avril|mai|juin|juillet|ao[uû]t|septembre|octobre|novembre|décembre|decembre)", ql)):
-        month = MONTHS[m3.group(1).replace("û","u")]
-    where = []
-    if "activity_type" in df.columns:
-        if " type = run" in f" {ql} " or " activity_type = run" in ql:
-            where.append({"column":"activity_type","op":"=","value":"run"})
-    group_by = "week" if weeks else ("month" if "par mois" in ql else ("day" if "par jour" in ql else "none"))
-    return {
-        "metric": {"op": op, "column": col},
-        "filters": {"year": year, "weeks": weeks, "month": month, "where": where},
-        "group_by": group_by,
-        "natural_language_goal": q
-    }
-
-plan = call_llm_plan(txt) or regex_fallback(txt)
-
-# Sécuriser/normaliser la colonne choisie
 def resolve_column(col: Optional[str]) -> Optional[str]:
-    if not col: return None
-    if col in df.columns: return col
+    if not col:
+        return NUMERIC_COLS[0] if NUMERIC_COLS else (df.columns[0] if len(df.columns) else None)
+    if col in df.columns:
+        return col
     col_lc = col.lower()
     if col_lc in SYN_TO_COL and SYN_TO_COL[col_lc] in df.columns:
         return SYN_TO_COL[col_lc]
     col_sn = snake(col_lc)
-    if col_sn in df.columns: return col_sn
+    if col_sn in df.columns:
+        return col_sn
     return NUMERIC_COLS[0] if NUMERIC_COLS else (df.columns[0] if len(df.columns) else None)
 
-if "metric" in plan:
-    plan["metric"]["column"] = resolve_column(plan.get("metric", {}).get("column"))
-
 # =========================
-# Exécution calculs (aucun affichage brut)
+# Filtres + agrégations (core calcul)
 # =========================
 def apply_filters(dd: pd.DataFrame, plan: Dict[str, Any]) -> Tuple[pd.DataFrame, Optional[str]]:
     out = dd.copy()
@@ -250,20 +150,26 @@ def apply_filters(dd: pd.DataFrame, plan: Dict[str, Any]) -> Tuple[pd.DataFrame,
             if tcol: out = out[out[tcol].dt.month == int(F["month"])]
 
     if (w := F.get("weeks")) and "iso_week" in out.columns:
-        out = out[(out["iso_week"] >= int(w["from"])) & (out["iso_week"] <= int(w["to"]))]
+        try:
+            out = out[(out["iso_week"] >= int(w["from"])) & (out["iso_week"] <= int(w["to"]))]
+        except Exception:
+            pass
 
     for cond in F.get("where", []) or []:
         col, op, val = cond.get("column"), cond.get("op"), cond.get("value")
-        if not col or col not in out.columns: continue
+        if not col or col not in out.columns: 
+            continue
         s = out[col]
         if pd.api.types.is_numeric_dtype(s):
             try: val_cast = float(val)
-            except: continue
+            except: 
+                continue
         elif pd.api.types.is_bool_dtype(s):
             val_cast = str(val).lower() in ("true","1","yes","oui")
         elif pd.api.types.is_datetime64_any_dtype(s):
             try: val_cast = pd.to_datetime(val, utc=True)
-            except: continue
+            except: 
+                continue
         else:
             val_cast = str(val)
         if op == "=": out = out[s == val_cast]
@@ -289,7 +195,7 @@ def aggregate(dd: pd.DataFrame, plan: Dict[str, Any], key: Optional[str]) -> Tup
         op = "count"
 
     if key is not None:
-        g = dd.groupby(key)
+        g = dd.groupby(key, dropna=False)
         if op == "sum": out = g[col].sum(numeric_only=True)
         elif op == "avg": out = g[col].mean(numeric_only=True)
         elif op == "max": out = g[col].max(numeric_only=True)
@@ -307,62 +213,193 @@ def aggregate(dd: pd.DataFrame, plan: Dict[str, Any], key: Optional[str]) -> Tup
         else: val = dd[col].sum(numeric_only=True)
         return pd.DataFrame({"metric":[f"{op}_{col}"], "value":[val]}), "metric", "value"
 
-df_filt, group_key = apply_filters(df, plan)
-if df_filt.empty:
-    st.write("Aucun enregistrement ne correspond à ta demande après application des filtres.")
+# =========================
+# Mémoire légère de conversation (filtres implicites)
+# =========================
+if "chat_history" not in st.session_state:
+    st.session_state.chat_history = []
+if "agent_filters" not in st.session_state:
+    st.session_state.agent_filters = {"year": None, "type": None}
+
+# =========================
+# UI — Saisie question
+# =========================
+txt = st.text_input("Pose ta question :", placeholder="Ex: d+ moyen par semaine cette année, pour les runs")
+go = st.button("Envoyer")
+
+if not (txt and go):
     st.stop()
 
-result, x, y = aggregate(df_filt, plan, group_key)
-
 # =========================
-# Rédaction de la réponse (phrases seulement)
+# Agent avec function calling (ChatCompletions)
 # =========================
-def fmt_num(v: Any) -> str:
-    try:
-        if pd.isna(v): return "—"
-        if isinstance(v, (int,)) or float(v).is_integer():
-            return f"{float(v):,.0f}".replace(",", " ").replace("\xa0"," ")
-        return f"{float(v):,.2f}".replace(",", " ").replace("\xa0"," ")
-    except Exception:
-        return str(v)
+def tool_list_columns() -> Dict[str, Any]:
+    return {"columns": [{"name": c, "type": dtype_str(df[c])} for c in df.columns]}
 
-def describe_filters(F: Dict[str, Any]) -> str:
-    parts = []
-    if F.get("year") is not None: parts.append(f"année {F['year']}")
-    if F.get("month") is not None: parts.append(f"mois {int(F['month'])}")
-    if F.get("weeks"): parts.append(f"semaines {F['weeks']['from']} à {F['weeks']['to']}")
-    if F.get("where"):
-        wh = []
-        for c in F["where"]:
-            if c.get("column") and c.get("op") and c.get("value") is not None:
-                wh.append(f"{c['column']} {c['op']} {c['value']}")
-        if wh: parts.append("filtre: " + ", ".join(wh))
-    return (" (" + "; ".join(parts) + ")") if parts else ""
+def tool_aggregate_dataframe(filters: Optional[Dict[str, Any]], group_by: str, op: str, column: str) -> Dict[str, Any]:
+    # Fusionne filtres implicites et explicites
+    F = {"year": st.session_state.agent_filters.get("year"),
+         "month": None, "weeks": None, "where": []}
+    if filters:
+        for k,v in filters.items():
+            if v is not None:
+                F[k] = v
 
-def verbalize(plan: Dict[str, Any], result: pd.DataFrame, x: str, y: str) -> str:
-    metric = plan.get("metric", {})
-    op = (metric.get("op") or "sum").lower()
-    col = metric.get("column") or "valeur"
-    F = plan.get("filters") or {}
-    gby = plan.get("group_by","none")
+    # Si l'utilisateur a déjà dit "run"
+    if st.session_state.agent_filters.get("type") and "activity_type" in df.columns:
+        F["where"] = (F.get("where") or []) + [{"column":"activity_type","op":"=","value":st.session_state.agent_filters["type"]}]
 
-    if x in ("metric","value"):  # agrégat unique
-        val = result.iloc[0][y]
-        return f"{op} de **{col}**{describe_filters(F)} : {fmt_num(val)}."
+    col = resolve_column(column)
+    dd, group_key = apply_filters(df, {"filters":F, "group_by":group_by})
+    if dd.empty:
+        return {"empty": True}
+
+    res, x, y = aggregate(dd, {"metric":{"op":op,"column":col},"group_by":group_by}, group_key)
+
+    if x in ("metric","value"):
+        val = res.iloc[0][y]
+        return {
+            "empty": False,
+            "mode": "single",
+            "label": f"{op}_{col}",
+            "value": None if pd.isna(val) else float(val),
+            "filters": F,
+            "group_by": group_by
+        }
     else:
-        # groupé: on donne un résumé concis + quelques points
-        n = len(result)
-        # ordonner par groupe si possible
-        try:
-            res_sorted = result.sort_values(by=x)
-        except Exception:
-            res_sorted = result
-        head = res_sorted.head(8)
-        pairs = ", ".join([f"{str(row[x])}: {fmt_num(row[y])}" for _, row in head.iterrows()])
-        more = "" if n <= len(head) else f" … et {n - len(head)} autres."
-        label = "par semaine" if gby=="week" else ("par mois" if gby=="month" else "par jour")
-        return f"{op} de **{col}** {label}{describe_filters(F)} — {pairs}{more}"
+        rows = []
+        for _, row in res.iterrows():
+            rows.append({"group": str(row[x]), "value": None if pd.isna(row[y]) else float(row[y])})
+        return {
+            "empty": False,
+            "mode": "grouped",
+            "rows": rows,
+            "metric": f"{op}_{col}",
+            "filters": F,
+            "group_by": group_key or "none"
+        }
 
-# Affichage final: PHRASES UNIQUEMENT
-response_text = verbalize(plan, result, x, y)
-st.markdown(response_text)
+# Mise à jour de la mémoire implicite
+txt_low = txt.lower()
+if "run" in txt_low or "course" in txt_low:
+    st.session_state.agent_filters["type"] = "run"
+if "cette année" in txt_low:
+    st.session_state.agent_filters["year"] = date.today().year
+m = re.search(r"(20\d{2})", txt_low)
+if m:
+    st.session_state.agent_filters["year"] = int(m.group(1))
+
+# Appel LLM
+if not OPENAI_API_KEY:
+    st.markdown("Je ne peux pas répondre pour l’instant : clé OpenAI absente.")
+    st.stop()
+
+from openai import OpenAI
+client = OpenAI(api_key=OPENAI_API_KEY)
+
+SYSTEM = """
+Tu es un analyste d'entraînement. Tu réponds en français, de façon claire et naturelle.
+- Quand un calcul est nécessaire, appelle la fonction aggregate_dataframe avec des filtres raisonnables (par ex. activity_type='run' si la question parle de course), puis explique le résultat simplement (phrases).
+- Si tu ignores les colonnes disponibles, appelle list_columns.
+- N'invente pas de colonnes.
+- Reste concis et utile. Pas de tableaux sauf si l'utilisateur le demande explicitement.
+"""
+
+tools = [
+    {
+        "type": "function",
+        "function": {
+            "name": "list_columns",
+            "description": "Retourne la liste des colonnes et leurs types détectés.",
+            "parameters": {"type": "object", "properties": {}}
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "aggregate_dataframe",
+            "description": "Agrège le DataFrame avec filtres implicites/explicites.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "filters": {
+                        "type": "object",
+                        "properties": {
+                            "year": {"type":"integer", "nullable": True},
+                            "weeks": {"type":"object","properties":{
+                                "from":{"type":"integer"}, "to":{"type":"integer"}
+                            }, "nullable": True},
+                            "month": {"type":"integer","minimum":1,"maximum":12,"nullable": True},
+                            "where": {"type":"array","items":{
+                                "type":"object",
+                                "properties": {
+                                    "column":{"type":"string"},
+                                    "op":{"type":"string","enum":["<=",">=","=","!=","contains"]},
+                                    "value": {}
+                                },
+                                "required":["column","op","value"]
+                            }}
+                        }
+                    },
+                    "group_by": {"type":"string","enum":["week","month","day","none"]},
+                    "op": {"type":"string","enum":["sum","avg","max","min","count"]},
+                    "column": {"type":"string"}
+                },
+                "required":["op","column","group_by"]
+            }
+        }
+    }
+]
+
+messages = [{"role":"system","content": SYSTEM}] + st.session_state.chat_history + [
+    {"role":"user","content": txt}
+]
+
+resp = client.chat.completions.create(
+    model="gpt-4o-mini",
+    temperature=0.2,
+    messages=messages,
+    tools=tools,
+    tool_choice="auto"
+)
+
+final_text = None
+tool_calls = resp.choices[0].message.tool_calls if resp.choices and resp.choices[0].message and hasattr(resp.choices[0].message, "tool_calls") else None
+
+# Si le modèle appelle des outils, on les exécute puis on renvoie la réponse finale
+if tool_calls:
+    messages.append(resp.choices[0].message)
+    for tc in tool_calls:
+        fn_name = tc.function.name
+        args = json.loads(tc.function.arguments or "{}")
+        if fn_name == "list_columns":
+            out = tool_list_columns()
+        elif fn_name == "aggregate_dataframe":
+            out = tool_aggregate_dataframe(**args)
+        else:
+            out = {"error":"unknown_tool"}
+        messages.append({
+            "role": "tool",
+            "tool_call_id": tc.id,
+            "name": fn_name,
+            "content": json.dumps(out, ensure_ascii=False)
+        })
+    resp2 = client.chat.completions.create(
+        model="gpt-4o-mini",
+        temperature=0.2,
+        messages=messages
+    )
+    final_text = resp2.choices[0].message.content.strip() if resp2.choices else ""
+else:
+    final_text = resp.choices[0].message.content.strip() if resp.choices else ""
+
+# Mémorisation de l'échange
+st.session_state.chat_history += [
+    {"role":"user","content": txt},
+    {"role":"assistant","content": final_text}
+]
+
+# =========================
+# Affichage final — PHRASES UNIQUEMENT
+# =========================
+st.markdown(final_text)

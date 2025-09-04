@@ -13,19 +13,15 @@ from datetime import date
 
 st.title("Saisie — Journal")
 
-# ---------- Styles globaux : bouton vert + checkbox verte
+# ---------- Styles (boutons = style par défaut; checkbox verte seulement)
 st.markdown("""
 <style>
-div.stButton > button {
-  background-color:#16a34a !important; /* green-600 */
-  color:white !important;
-  border:1px solid #16a34a !important;
+/* Ne touche PAS aux boutons (on laisse le style Streamlit par défaut) */
+
+/* Option : checkbox verte uniquement dans la zone contenu */
+div[data-testid="stAppViewContainer"] input[type="checkbox"]{
+  accent-color:#16a34a;
 }
-div.stButton > button:hover {
-  background-color:#15803d !important; /* green-700 */
-  border-color:#15803d !important;
-}
-input[type="checkbox"]{ accent-color:#16a34a; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -176,7 +172,6 @@ if submit_clicked:
             "malheur":           malheur,
             "charge_mentale":    charge_mentale,
             "nombre_de_pas":     int(_none_if_zero(nombre_de_pas)) if _none_if_zero(nombre_de_pas) is not None else None,
-            # Difficulté de séance -> note_entrainement uniquement s'il y a séance
             "note_entrainement": difficulte_seance if not st.session_state.rest_day else None,
         }
 
@@ -187,8 +182,8 @@ if submit_clicked:
                 "dplus_course_m":        int(_none_if_zero(dplus_m)) if _none_if_zero(dplus_m) is not None else None,
                 "dmoins_course_m":       int(_none_if_zero(dmoins_m)) if _none_if_zero(dmoins_m) is not None else None,
                 "temps_course_min":      int(_none_if_zero(temps_min)) if _none_if_zero(temps_min) is not None else None,
-                "allure_course_min_km":  allure_min_km,   # mm:ss -> minutes
-                "vap_course_min_km":     vap_min_km,      # mm:ss -> minutes
+                "allure_course_min_km":  allure_min_km,
+                "vap_course_min_km":     vap_min_km,
                 "fc_moyenne_course":     int(_none_if_zero(fc_moy)) if _none_if_zero(fc_moy) is not None else None,
                 "fc_max_course":         int(_none_if_zero(fc_max)) if _none_if_zero(fc_max) is not None else None,
                 "pct_zone1_course":      float(_none_if_zero(z1)),
@@ -205,7 +200,6 @@ if submit_clicked:
                 "meteo":                 meteo or None,
             })
         else:
-            # Repos : nulifie tout ce qui concerne entraînement + météo
             for k in [
                 "seance_course","distance_course_km","dplus_course_m","dmoins_course_m",
                 "temps_course_min","allure_course_min_km","vap_course_min_km",
@@ -221,4 +215,5 @@ if submit_clicked:
     except Exception as e:
         st.error(f"Erreur d’enregistrement : {e}")
 
+# Bouton de déconnexion en bas du sidebar
 sidebar_logout_bottom(sb)

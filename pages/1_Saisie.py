@@ -2,6 +2,7 @@
 import streamlit as st
 from supa import get_client
 from utils import require_login
+from utils import sidebar_logout_bottom
 
 sb = get_client()
 u = require_login(sb)  # bloque tant que l'utilisateur n'est pas connecté
@@ -219,3 +220,5 @@ if submit_clicked:
         st.success("Ligne enregistrée ✔")
     except Exception as e:
         st.error(f"Erreur d’enregistrement : {e}")
+
+sidebar_logout_bottom(sb)

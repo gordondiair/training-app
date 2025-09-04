@@ -17,7 +17,7 @@ st.title("📊 Semaine — agrégats")
 
 # ---------- Helpers ----------
 def mmss_from_min_per_km(x: float) -> str:
-    """x en minutes/km -> 'mm:ss/km' ; gère NaN/inf."""
+    """x en minutes/km -> 'mm:ss/km' ; gère NaN/inf (pour affichage tableau uniquement)."""
     if x is None or pd.isna(x) or not np.isfinite(x) or x <= 0:
         return ""
     total_sec = int(round(x * 60))
@@ -37,33 +37,34 @@ if df.empty:
 # ---------- 2) Tri + colonnes dérivées ----------
 df = df.sort_values(["iso_year", "week_no"]).reset_index(drop=True)
 
-# 2.a) Temps course en minutes (colonne 'elapsed_time' déjà en minutes si présente)
+# 2.a) Temps course en minutes : on prend directement 'elapsed_time' (déjà minutes). Fallback sur run_time_s/60 si besoin.
 if "elapsed_time" in df.columns:
     df["run_time_minutes"] = pd.to_numeric(df["elapsed_time"], errors="coerce")
 else:
     df["run_time_minutes"] = pd.to_numeric(df.get("run_time_s"), errors="coerce") / 60.0
 
-# 2.b) Allure et VAP : on reprend les valeurs telles quelles (déjà en min/km)
-#     On accepte deux conventions de noms possibles pour compat.
-df["allure_min_km"] = pd.to_numeric(
-    df.get("allure_avg_min_km", df.get("average_speed")), errors="coerce"
-)
-df["vap_min_km"] = pd.to_numeric(
-    df.get("vap_avg_min_km", df.get("average_grade_adjusted_pace")), errors="coerce"
-)
+# 2.b) Allure & VAP : on prend TEL QUEL depuis la DB (déjà en min/km). Pas de conversion d’unités.
+#     (On force simplement en numérique si stocké en string "5.30" etc., sans changer d’échelle.)
+required = ["average_speed", "average_grade_adjusted_pace"]
+missing = [c for c in required if c not in df.columns]
+if missing:
+    st.warning("Colonnes attendues manquantes : " + ", ".join(missing))
 
-# 2.c) Colonnes formatées lisibles
+df["average_speed"] = pd.to_numeric(df.get("average_speed"), errors="coerce")
+df["average_grade_adjusted_pace"] = pd.to_numeric(df.get("average_grade_adjusted_pace"), errors="coerce")
+
+# 2.c) Colonnes formatées (pour le tableau uniquement ; les graphes utilisent les colonnes brutes)
 df_display = df.copy()
-df_display["Allure (mm:ss/km)"] = df_display["allure_min_km"].apply(mmss_from_min_per_km)
-df_display["VAP (mm:ss/km)"]    = df_display["vap_min_km"].apply(mmss_from_min_per_km)
+df_display["Allure (mm:ss/km)"] = df_display["average_speed"].apply(mmss_from_min_per_km)
+df_display["VAP (mm:ss/km)"]    = df_display["average_grade_adjusted_pace"].apply(mmss_from_min_per_km)
 
 # ---------- 3) Dictionnaire des métriques pour le graphe ----------
 metrics = {
     "Km course": "run_km",
     "D+ course (m)": "run_dplus_m",
-    "Temps course (minutes)": "run_time_minutes",   # <-- elapsed_time (minutes)
-    "Allure moyenne (min/km)": "allure_min_km",     # <-- pris tel quel (min/km)
-    "VAP moyenne (min/km)": "vap_min_km",           # <-- pris tel quel (min/km)
+    "Temps course (minutes)": "run_time_minutes",                 # <-- elapsed_time (minutes)
+    "Allure moyenne (min/km)": "average_speed",                   # <-- DB direct (min/km)
+    "VAP moyenne (min/km)": "average_grade_adjusted_pace",        # <-- DB direct (min/km)
     "FC moyenne (bpm)": "fc_avg_simple",
     "Calories totales": "calories_total",
     "Pas totaux": "steps_total",
@@ -75,6 +76,9 @@ metrics = {
 label = st.selectbox("Choisis la métrique à tracer", list(metrics.keys()), index=0)
 ycol = metrics[label]
 
+# On s'assure que la colonne Y est numérique (sans changer d'unité).
+df[ycol] = pd.to_numeric(df[ycol], errors="coerce")
+
 fig = px.line(df, x="week_key", y=ycol, markers=True, title=label)
 fig.update_layout(xaxis_title="Semaine ISO", yaxis_title=label)
 st.plotly_chart(fig, use_container_width=True)
@@ -83,8 +87,8 @@ st.plotly_chart(fig, use_container_width=True)
 table_cols = [
     "iso_year", "week_no", "week_key",
     "run_km", "run_dplus_m", "run_time_minutes",
-    "allure_min_km", "Allure (mm:ss/km)",
-    "vap_min_km",    "VAP (mm:ss/km)",
+    "average_speed", "Allure (mm:ss/km)",
+    "average_grade_adjusted_pace", "VAP (mm:ss/km)",
     "fc_avg_simple",
     "calories_total", "steps_total", "relative_effort_avg",
 ]

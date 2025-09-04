@@ -15,9 +15,9 @@ import plotly.express as px
 
 st.title("📊 Semaine — agrégats")
 
-# ---------- Helpers ----------
+# ---------- Helpers (affichage tableau uniquement) ----------
 def mmss_from_min_per_km(x: float) -> str:
-    """x en minutes/km -> 'mm:ss/km' ; gère NaN/inf (pour affichage tableau uniquement)."""
+    """x en minutes/km -> 'mm:ss/km' ; gère NaN/inf."""
     if x is None or pd.isna(x) or not np.isfinite(x) or x <= 0:
         return ""
     total_sec = int(round(x * 60))
@@ -34,37 +34,26 @@ if df.empty:
     sidebar_logout_bottom(sb)
     st.stop()
 
-# ---------- 2) Tri + colonnes dérivées ----------
+# ---------- 2) Tri + nettoyages légers ----------
 df = df.sort_values(["iso_year", "week_no"]).reset_index(drop=True)
 
-# 2.a) Temps course en minutes : on prend directement 'elapsed_time' (déjà minutes). Fallback sur run_time_s/60 si besoin.
-if "elapsed_time" in df.columns:
-    df["run_time_minutes"] = pd.to_numeric(df["elapsed_time"], errors="coerce")
-else:
-    df["run_time_minutes"] = pd.to_numeric(df.get("run_time_s"), errors="coerce") / 60.0
-
-# 2.b) Allure & VAP : on prend TEL QUEL depuis la DB (déjà en min/km). Pas de conversion d’unités.
-#     (On force simplement en numérique si stocké en string "5.30" etc., sans changer d’échelle.)
-required = ["average_speed", "average_grade_adjusted_pace"]
-missing = [c for c in required if c not in df.columns]
-if missing:
-    st.warning("Colonnes attendues manquantes : " + ", ".join(missing))
-
-df["average_speed"] = pd.to_numeric(df.get("average_speed"), errors="coerce")
-df["average_grade_adjusted_pace"] = pd.to_numeric(df.get("average_grade_adjusted_pace"), errors="coerce")
-
-# 2.c) Colonnes formatées (pour le tableau uniquement ; les graphes utilisent les colonnes brutes)
-df_display = df.copy()
-df_display["Allure (mm:ss/km)"] = df_display["average_speed"].apply(mmss_from_min_per_km)
-df_display["VAP (mm:ss/km)"]    = df_display["average_grade_adjusted_pace"].apply(mmss_from_min_per_km)
+# Forcer numérique (sans changement d’unité) sur les colonnes qu’on trace
+num_cols = [
+    "run_km", "run_dplus_m", "run_time_minutes",
+    "average_speed", "average_grade_adjusted_pace",
+    "fc_avg_simple", "calories_total", "steps_total", "relative_effort_avg"
+]
+for c in num_cols:
+    if c in df.columns:
+        df[c] = pd.to_numeric(df[c], errors="coerce").replace([np.inf, -np.inf], np.nan)
 
 # ---------- 3) Dictionnaire des métriques pour le graphe ----------
 metrics = {
     "Km course": "run_km",
     "D+ course (m)": "run_dplus_m",
-    "Temps course (minutes)": "run_time_minutes",                 # <-- elapsed_time (minutes)
-    "Allure moyenne (min/km)": "average_speed",                   # <-- DB direct (min/km)
-    "VAP moyenne (min/km)": "average_grade_adjusted_pace",        # <-- DB direct (min/km)
+    "Temps course (minutes)": "run_time_minutes",
+    "Allure moyenne (min/km)": "average_speed",                   # <-- DB direct
+    "VAP moyenne (min/km)": "average_grade_adjusted_pace",        # <-- DB direct
     "FC moyenne (bpm)": "fc_avg_simple",
     "Calories totales": "calories_total",
     "Pas totaux": "steps_total",
@@ -76,14 +65,20 @@ metrics = {
 label = st.selectbox("Choisis la métrique à tracer", list(metrics.keys()), index=0)
 ycol = metrics[label]
 
-# On s'assure que la colonne Y est numérique (sans changer d'unité).
-df[ycol] = pd.to_numeric(df[ycol], errors="coerce")
-
-fig = px.line(df, x="week_key", y=ycol, markers=True, title=label)
-fig.update_layout(xaxis_title="Semaine ISO", yaxis_title=label)
-st.plotly_chart(fig, use_container_width=True)
+if ycol not in df.columns:
+    st.error(f"La colonne « {ycol} » est absente du RPC. Vérifie la fonction SQL.")
+else:
+    fig = px.line(df, x="week_key", y=ycol, markers=True, title=label)
+    fig.update_layout(xaxis_title="Semaine ISO", yaxis_title=label)
+    st.plotly_chart(fig, use_container_width=True)
 
 # ---------- 5) Tableau récap ----------
+df_display = df.copy()
+if "average_speed" in df_display.columns:
+    df_display["Allure (mm:ss/km)"] = df_display["average_speed"].apply(mmss_from_min_per_km)
+if "average_grade_adjusted_pace" in df_display.columns:
+    df_display["VAP (mm:ss/km)"]    = df_display["average_grade_adjusted_pace"].apply(mmss_from_min_per_km)
+
 table_cols = [
     "iso_year", "week_no", "week_key",
     "run_km", "run_dplus_m", "run_time_minutes",
@@ -94,12 +89,6 @@ table_cols = [
 ]
 table_cols = [c for c in table_cols if c in df_display.columns]
 
-df_show = df_display.copy()
-for c in table_cols:
-    if c in df_show.columns and df_show[c].dtype != "object":
-        df_show[c] = pd.to_numeric(df_show[c], errors="coerce")
-        df_show[c] = df_show[c].replace([np.inf, -np.inf], np.nan)
-
-st.dataframe(df_show[table_cols], use_container_width=True)
+st.dataframe(df_display[table_cols], use_container_width=True)
 
 sidebar_logout_bottom(sb)

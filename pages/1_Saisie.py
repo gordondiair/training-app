@@ -10,7 +10,7 @@ st.session_state["user"] = {"id": u.user.id, "email": u.user.email}
 
 from datetime import date
 
-st.title("🏠 Saisie — Journal")
+st.title("Saisie — Journal")
 
 # ---------- Styles globaux : bouton vert + checkbox verte
 st.markdown("""

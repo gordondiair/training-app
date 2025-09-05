@@ -7,22 +7,40 @@ import plotly.express as px
 # CSS + polices
 # =========================
 def inject_base_css():
+    from textwrap import dedent
+    import streamlit as st
+
     st.markdown(dedent("""
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700;800&display=swap" rel="stylesheet">
     <style>
       :root{
-        --brand:#2563eb; --ok:#16a34a; --warn:#f59e0b; --bg:#ffffff; --bg2:#f6f7fb;
-        --text:#0b1220; --muted:#6b7280; --border:#e5e7eb; --shadow:0 10px 30px rgba(0,0,0,.06);
-        --radius:18px; --radius-sm:12px; --pad:18px;
+        --brand:#2563eb; --ok:#16a34a; --warn:#f59e0b; --danger:#ef4444;
+        --bg:#ffffff; --bg2:#f6f7fb; --text:#0b1220; --muted:#6b7280;
+        --border:#e5e7eb; --shadow:0 10px 30px rgba(0,0,0,.06);
+        --radius:18px; --radius-sm:12px; --pad:18px; --focus:#93c5fd;
       }
-      html, body, [class*="css"] { font-family: 'Inter', system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
-      .main > div { padding-top: 1rem; }
 
-      /* Titres */
+      /* ---------- Typo + layout global ---------- */
+      html, body, [class*="css"] { font-family: 'Inter', system-ui, -apple-system, Segoe UI, Roboto, sans-serif; color: var(--text); }
+      /* conteneur principal centré et respirant */
+      .appview-container .main .block-container{
+        max-width: 1200px;
+        padding-top: 1rem;
+      }
+
+      /* ---------- Masquer le chrome Streamlit natif ---------- */
+      #MainMenu { visibility: hidden; }
+      header { visibility: hidden; }
+      footer { visibility: hidden; } /* masque le footer Streamlit natif */
+
+      /* ---------- Titres ---------- */
       h1, h2, h3 { letter-spacing:-0.01em; }
+      h1 { font-weight: 800; }
+      h2 { font-weight: 700; }
+      h3 { font-weight: 600; }
 
-      /* Cards génériques */
+      /* ---------- Cards génériques ---------- */
       .card{
         background: var(--bg);
         border: 1px solid var(--border);
@@ -37,7 +55,17 @@ def inject_base_css():
         padding: var(--pad);
       }
 
-      /* Badges / pills */
+      /* ---------- Sidebar plus propre ---------- */
+      section[data-testid="stSidebar"] {
+        background: #ffffff !important;
+        border-right: 1px solid var(--border);
+      }
+      section[data-testid="stSidebar"] .block-container { padding-top: 1rem; }
+      /* liens sidebar */
+      section[data-testid="stSidebar"] a { color: var(--text); text-decoration: none; }
+      section[data-testid="stSidebar"] a:hover { color: var(--brand); }
+
+      /* ---------- Pills / badges ---------- */
       .pill{
         display:inline-flex; gap:8px; align-items:center;
         padding:6px 10px; border-radius:999px; font-size:12px; font-weight:600;
@@ -45,36 +73,99 @@ def inject_base_css():
         margin-bottom:6px;
       }
 
-      /* Boutons */
-      div.stButton > button {
-        border-radius: 999px;
-        padding: 10px 18px;
-        border: 1px solid var(--brand);
-        color: #fff;
-        background: var(--brand);
-        box-shadow: var(--shadow);
+      /* ---------- Boutons ---------- */
+      div.stButton > button, button[kind="primary"]{
+        border-radius: 999px !important;
+        padding: 10px 18px !important;
+        border: 1px solid var(--brand) !important;
+        color: #fff !important;
+        background: var(--brand) !important;
+        box-shadow: var(--shadow) !important;
       }
-      div.stButton > button:hover { filter: brightness(0.95); }
+      div.stButton > button:hover, button[kind="primary"]:hover { filter: brightness(0.95); }
+      /* boutons secondaires */
+      button[kind="secondary"]{
+        border-radius: 999px !important;
+        border:1px solid var(--border) !important;
+        background:#fff !important; color:var(--text) !important;
+      }
 
-      /* Inputs */
+      /* ---------- Inputs & focus states ---------- */
       .stTextInput>div>div>input,
-      .stNumberInput input, textarea, select {
+      .stNumberInput input, textarea, select,
+      .stTextArea textarea, .stDateInput input, .stTimeInput input {
         border-radius: 12px !important;
         border:1px solid var(--border) !important;
         background: #fff !important;
       }
+      /* focus doux */
+      .stTextInput>div>div>input:focus,
+      .stNumberInput input:focus, textarea:focus, select:focus,
+      .stTextArea textarea:focus, .stDateInput input:focus, .stTimeInput input:focus{
+        outline: 3px solid var(--focus) !important;
+        border-color: #bfdbfe !important;
+      }
 
-      /* Tableaux */
+      /* ---------- Radios / Checkbox / Slider ---------- */
+      input[type="checkbox"]{ accent-color: var(--brand); }
+      input[type="radio"]{ accent-color: var(--brand); }
+      .stSlider [role="slider"] { border-color: var(--brand) !important; }
+
+      /* ---------- Onglets ---------- */
+      .stTabs [data-baseweb="tab-list"]{
+        gap:8px; border-bottom:1px solid var(--border);
+      }
+      .stTabs [data-baseweb="tab"]{
+        border:1px solid var(--border); border-bottom:none;
+        border-top-left-radius: 12px; border-top-right-radius:12px;
+        background:#fff; padding:8px 12px;
+      }
+      .stTabs [aria-selected="true"]{
+        background:#eef2ff; border-color:#dbeafe; color:#1e3a8a;
+      }
+
+      /* ---------- Tableaux ---------- */
       .styled-table { width: 100%; border-collapse: collapse; border:1px solid var(--border);
                       border-radius: var(--radius); overflow:hidden; }
       .styled-table th, .styled-table td { padding: 12px 14px; border-bottom:1px solid var(--border); }
       .styled-table tr:hover { background:#fafafa }
+      /* dataframes scrollables : coins arrondis */
+      div[data-testid="stDataFrame"] { border:1px solid var(--border); border-radius:12px; }
 
-      /* Footer discret */
+      /* ---------- Uploader ---------- */
+      section[data-testid="stFileUploader"] div[role="button"]{
+        border-radius: 14px !important;
+        border:1px dashed var(--border) !important;
+        background: var(--bg2) !important;
+      }
+
+      /* ---------- Chart wrapper ---------- */
+      .element-container:has(.js-plotly-plot) .stPlotlyChart{
+        border:1px solid var(--border); border-radius:12px; padding:6px;
+        background:#fff; box-shadow: var(--shadow);
+      }
+
+      /* ---------- Messages / alerts ---------- */
+      .stAlert { border-radius: 12px; border:1px solid var(--border); }
+      .stSuccess { border-color:#bbf7d0; background:#ecfdf5; }
+      .stWarning { border-color:#fed7aa; background:#fff7ed; }
+      .stError   { border-color:#fecaca; background:#fef2f2; }
+
+      /* ---------- Liens ---------- */
+      a { color: var(--brand); text-decoration: none; }
+      a:hover { text-decoration: underline; }
+
+      /* ---------- Scrollbar discrète (WebKit) ---------- */
+      ::-webkit-scrollbar { width: 10px; height:10px; }
+      ::-webkit-scrollbar-track { background: transparent; }
+      ::-webkit-scrollbar-thumb { background: #d1d5db; border-radius: 999px; }
+      ::-webkit-scrollbar-thumb:hover { background: #9ca3af; }
+
+      /* ---------- Footer custom (le tien) ---------- */
       .app-footer { color:var(--muted); font-size:13px; margin-top:32px; }
-      footer {visibility:hidden;} /* masque le footer par défaut Streamlit */
     </style>
     """), unsafe_allow_html=True)
+
 
 # =========================
 # Composants

@@ -22,6 +22,10 @@ import requests  # ← on utilise l’API REST OpenAI (pas de SDK)
 # PAGE
 # =========================
 st.set_page_config(page_title="🤖 Questions — strava_import", layout="wide")
+
+from utils_ui import inject_base_css, hero, section, stat_cards, callout, app_footer
+inject_base_css()
+
 st.title("🤖 Questions (réponse en phrases) — strava_import")
 sidebar_logout_bottom(sb)
 

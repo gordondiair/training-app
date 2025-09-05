@@ -13,9 +13,7 @@ import pandas as pd
 import numpy as np
 import plotly.express as px
 
-from utils_ui import inject_base_css, hero, section, stat_cards, callout, app_footer
-inject_base_css()
-
+st.set_page_config(page_title="📊 Semaine — agrégats", layout="wide")
 st.title("📊 Semaine — agrégats")
 
 def mmss_from_min_per_km(x: float) -> str:
@@ -62,9 +60,9 @@ if "run_dplus_m" in df.columns:
 if "run_time_minutes" in df.columns:
     metrics["Temps course (minutes)"] = "run_time_minutes"
 if "average_speed" in df.columns:
-    metrics["Allure moyenne (min/km)"] = "average_speed"  # DB direct
+    metrics["Allure moyenne (min/km)"] = "average_speed"  # min/km si ta fonction RPC renvoie déjà ça
 if "average_grade_adjusted_pace" in df.columns:
-    metrics["VAP moyenne (min/km)"] = "average_grade_adjusted_pace"  # DB direct
+    metrics["VAP moyenne (min/km)"] = "average_grade_adjusted_pace"  # min/km si dispo
 if "fc_avg_simple" in df.columns:
     metrics["FC moyenne (bpm)"] = "fc_avg_simple"
 if "calories_total" in df.columns:

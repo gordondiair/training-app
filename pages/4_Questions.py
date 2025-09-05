@@ -18,6 +18,10 @@ from typing import Any, Dict, List, Optional, Tuple
 import pandas as pd
 import requests  # ← on utilise l’API REST OpenAI (pas de SDK)
 
+from utils_ui import inject_base_css, hero, section, stat_cards, callout, app_footer
+inject_base_css()
+
+
 # =========================
 # PAGE
 # =========================

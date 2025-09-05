@@ -14,6 +14,10 @@ import numpy as np
 import plotly.express as px
 
 st.set_page_config(page_title="📊 Semaine — agrégats", layout="wide")
+
+from utils_ui import inject_base_css, hero, section, stat_cards, callout, app_footer
+inject_base_css()
+
 st.title("📊 Semaine — agrégats")
 
 def mmss_from_min_per_km(x: float) -> str:

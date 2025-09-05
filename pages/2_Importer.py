@@ -15,6 +15,9 @@ from utils import sidebar_logout_bottom
 
 st.set_page_config(page_title="Importer — Strava", layout="wide")
 
+from utils_ui import inject_base_css, hero, section, stat_cards, callout, app_footer
+inject_base_css()
+
 # =========================
 # Helpers
 # =========================

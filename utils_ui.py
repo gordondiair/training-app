@@ -6,13 +6,12 @@ import plotly.express as px
 # =========================
 # CSS + polices
 # =========================
+# utils_ui.py
 def inject_base_css():
     from textwrap import dedent
-    import streamlit as st
+    from streamlit.components.v1 import html  # <- composant HTML sûr
 
-    st.markdown(dedent("""
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700;800&display=swap" rel="stylesheet">
+    css = dedent("""
     <style>
       :root{
         --brand:#2563eb; --ok:#16a34a; --warn:#f59e0b; --danger:#ef4444;
@@ -21,150 +20,85 @@ def inject_base_css():
         --radius:18px; --radius-sm:12px; --pad:18px; --focus:#93c5fd;
       }
 
-      /* ---------- Typo + layout global ---------- */
-      html, body, [class*="css"] { font-family: 'Inter', system-ui, -apple-system, Segoe UI, Roboto, sans-serif; color: var(--text); }
-      /* conteneur principal centré et respirant */
-      .appview-container .main .block-container{
-        max-width: 1200px;
-        padding-top: 1rem;
-      }
+      /* Typo + layout */
+      html, body, [class*="css"] { font-family: 'Inter',system-ui,-apple-system,Segoe UI,Roboto,sans-serif; color: var(--text); }
+      .appview-container .main .block-container{ max-width:1200px; padding-top:1rem; }
 
-      /* ---------- Masquer le chrome Streamlit natif ---------- */
-      #MainMenu { visibility: hidden; }
-      header { visibility: hidden; }
-      footer { visibility: hidden; } /* masque le footer Streamlit natif */
+      /* Masquer le chrome Streamlit */
+      #MainMenu { visibility:hidden; }
+      header { visibility:hidden; }
+      footer { visibility:hidden; } /* footer Streamlit natif */
 
-      /* ---------- Titres ---------- */
+      /* Titres */
       h1, h2, h3 { letter-spacing:-0.01em; }
-      h1 { font-weight: 800; }
-      h2 { font-weight: 700; }
-      h3 { font-weight: 600; }
+      h1 { font-weight:800; } h2 { font-weight:700; } h3 { font-weight:600; }
 
-      /* ---------- Cards génériques ---------- */
-      .card{
-        background: var(--bg);
-        border: 1px solid var(--border);
-        border-radius: var(--radius);
-        padding: var(--pad);
-        box-shadow: var(--shadow);
-      }
-      .card-ghost{
-        background: var(--bg2);
-        border: 1px dashed var(--border);
-        border-radius: var(--radius);
-        padding: var(--pad);
-      }
+      /* Cards */
+      .card{ background:var(--bg); border:1px solid var(--border); border-radius:var(--radius);
+             padding:var(--pad); box-shadow:var(--shadow); }
+      .card-ghost{ background:var(--bg2); border:1px dashed var(--border); border-radius:var(--radius); padding:var(--pad); }
 
-      /* ---------- Sidebar plus propre ---------- */
-      section[data-testid="stSidebar"] {
-        background: #ffffff !important;
-        border-right: 1px solid var(--border);
-      }
-      section[data-testid="stSidebar"] .block-container { padding-top: 1rem; }
-      /* liens sidebar */
-      section[data-testid="stSidebar"] a { color: var(--text); text-decoration: none; }
-      section[data-testid="stSidebar"] a:hover { color: var(--brand); }
+      /* Sidebar */
+      section[data-testid="stSidebar"]{ background:#fff !important; border-right:1px solid var(--border); }
+      section[data-testid="stSidebar"] .block-container{ padding-top:1rem; }
 
-      /* ---------- Pills / badges ---------- */
-      .pill{
-        display:inline-flex; gap:8px; align-items:center;
-        padding:6px 10px; border-radius:999px; font-size:12px; font-weight:600;
-        background:#eef2ff; color:#1e3a8a; border:1px solid #dbeafe;
-        margin-bottom:6px;
-      }
+      /* Pills */
+      .pill{ display:inline-flex; gap:8px; align-items:center; padding:6px 10px; border-radius:999px;
+             font-size:12px; font-weight:600; background:#eef2ff; color:#1e3a8a; border:1px solid #dbeafe; margin-bottom:6px; }
 
-      /* ---------- Boutons ---------- */
+      /* Boutons */
       div.stButton > button, button[kind="primary"]{
-        border-radius: 999px !important;
-        padding: 10px 18px !important;
-        border: 1px solid var(--brand) !important;
-        color: #fff !important;
-        background: var(--brand) !important;
-        box-shadow: var(--shadow) !important;
+        border-radius:999px !important; padding:10px 18px !important;
+        border:1px solid var(--brand) !important; color:#fff !important; background:var(--brand) !important; box-shadow:var(--shadow) !important;
       }
-      div.stButton > button:hover, button[kind="primary"]:hover { filter: brightness(0.95); }
-      /* boutons secondaires */
-      button[kind="secondary"]{
-        border-radius: 999px !important;
-        border:1px solid var(--border) !important;
-        background:#fff !important; color:var(--text) !important;
-      }
+      div.stButton > button:hover, button[kind="primary"]:hover{ filter:brightness(0.95); }
+      button[kind="secondary"]{ border-radius:999px !important; border:1px solid var(--border) !important; background:#fff !important; color:var(--text) !important; }
 
-      /* ---------- Inputs & focus states ---------- */
-      .stTextInput>div>div>input,
-      .stNumberInput input, textarea, select,
-      .stTextArea textarea, .stDateInput input, .stTimeInput input {
-        border-radius: 12px !important;
-        border:1px solid var(--border) !important;
-        background: #fff !important;
+      /* Inputs & focus */
+      .stTextInput>div>div>input, .stNumberInput input, textarea, select,
+      .stTextArea textarea, .stDateInput input, .stTimeInput input{
+        border-radius:12px !important; border:1px solid var(--border) !important; background:#fff !important;
       }
-      /* focus doux */
-      .stTextInput>div>div>input:focus,
-      .stNumberInput input:focus, textarea:focus, select:focus,
+      .stTextInput>div>div>input:focus, .stNumberInput input:focus, textarea:focus, select:focus,
       .stTextArea textarea:focus, .stDateInput input:focus, .stTimeInput input:focus{
-        outline: 3px solid var(--focus) !important;
-        border-color: #bfdbfe !important;
+        outline:3px solid var(--focus) !important; border-color:#bfdbfe !important;
       }
 
-      /* ---------- Radios / Checkbox / Slider ---------- */
-      input[type="checkbox"]{ accent-color: var(--brand); }
-      input[type="radio"]{ accent-color: var(--brand); }
-      .stSlider [role="slider"] { border-color: var(--brand) !important; }
+      /* Tabs */
+      .stTabs [data-baseweb="tab-list"]{ gap:8px; border-bottom:1px solid var(--border); }
+      .stTabs [data-baseweb="tab"]{ border:1px solid var(--border); border-bottom:none; border-top-left-radius:12px; border-top-right-radius:12px;
+                                    background:#fff; padding:8px 12px; }
+      .stTabs [aria-selected="true"]{ background:#eef2ff; border-color:#dbeafe; color:#1e3a8a; }
 
-      /* ---------- Onglets ---------- */
-      .stTabs [data-baseweb="tab-list"]{
-        gap:8px; border-bottom:1px solid var(--border);
-      }
-      .stTabs [data-baseweb="tab"]{
-        border:1px solid var(--border); border-bottom:none;
-        border-top-left-radius: 12px; border-top-right-radius:12px;
-        background:#fff; padding:8px 12px;
-      }
-      .stTabs [aria-selected="true"]{
-        background:#eef2ff; border-color:#dbeafe; color:#1e3a8a;
-      }
+      /* Tables */
+      .styled-table{ width:100%; border-collapse:collapse; border:1px solid var(--border); border-radius:var(--radius); overflow:hidden; }
+      .styled-table th, .styled-table td{ padding:12px 14px; border-bottom:1px solid var(--border); }
+      .styled-table tr:hover{ background:#fafafa }
+      div[data-testid="stDataFrame"]{ border:1px solid var(--border); border-radius:12px; }
 
-      /* ---------- Tableaux ---------- */
-      .styled-table { width: 100%; border-collapse: collapse; border:1px solid var(--border);
-                      border-radius: var(--radius); overflow:hidden; }
-      .styled-table th, .styled-table td { padding: 12px 14px; border-bottom:1px solid var(--border); }
-      .styled-table tr:hover { background:#fafafa }
-      /* dataframes scrollables : coins arrondis */
-      div[data-testid="stDataFrame"] { border:1px solid var(--border); border-radius:12px; }
-
-      /* ---------- Uploader ---------- */
+      /* Uploader */
       section[data-testid="stFileUploader"] div[role="button"]{
-        border-radius: 14px !important;
-        border:1px dashed var(--border) !important;
-        background: var(--bg2) !important;
+        border-radius:14px !important; border:1px dashed var(--border) !important; background:var(--bg2) !important;
       }
 
-      /* ---------- Chart wrapper ---------- */
-      .element-container:has(.js-plotly-plot) .stPlotlyChart{
-        border:1px solid var(--border); border-radius:12px; padding:6px;
-        background:#fff; box-shadow: var(--shadow);
-      }
+      /* Charts */
+      .element-container:has(.js-plotly-plot) .stPlotlyChart{ border:1px solid var(--border); border-radius:12px; padding:6px; background:#fff; box-shadow:var(--shadow); }
 
-      /* ---------- Messages / alerts ---------- */
-      .stAlert { border-radius: 12px; border:1px solid var(--border); }
-      .stSuccess { border-color:#bbf7d0; background:#ecfdf5; }
-      .stWarning { border-color:#fed7aa; background:#fff7ed; }
-      .stError   { border-color:#fecaca; background:#fef2f2; }
+      /* Scrollbar discrète */
+      ::-webkit-scrollbar{ width:10px; height:10px; }
+      ::-webkit-scrollbar-thumb{ background:#d1d5db; border-radius:999px; }
+      ::-webkit-scrollbar-thumb:hover{ background:#9ca3af; }
 
-      /* ---------- Liens ---------- */
-      a { color: var(--brand); text-decoration: none; }
-      a:hover { text-decoration: underline; }
-
-      /* ---------- Scrollbar discrète (WebKit) ---------- */
-      ::-webkit-scrollbar { width: 10px; height:10px; }
-      ::-webkit-scrollbar-track { background: transparent; }
-      ::-webkit-scrollbar-thumb { background: #d1d5db; border-radius: 999px; }
-      ::-webkit-scrollbar-thumb:hover { background: #9ca3af; }
-
-      /* ---------- Footer custom (le tien) ---------- */
-      .app-footer { color:var(--muted); font-size:13px; margin-top:32px; }
+      /* Footer custom (le tien) */
+      .app-footer{ color:var(--muted); font-size:13px; margin-top:32px; }
     </style>
-    """), unsafe_allow_html=True)
+    """)
+
+    # Injection via un iframe vide (hauteur 0) : jamais affiché en clair
+    html(css, height=0)
+    # Police (Inter)
+    html('<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700;800&display=swap" rel="stylesheet">', height=0)
+
 
 
 # =========================

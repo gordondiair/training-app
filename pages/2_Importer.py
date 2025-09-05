@@ -15,9 +15,6 @@ from utils import sidebar_logout_bottom
 
 st.set_page_config(page_title="Importer — Strava", layout="wide")
 
-from utils_ui import inject_base_css, hero, section, stat_cards, callout, app_footer
-inject_base_css()
-
 # =========================
 # Helpers
 # =========================
@@ -126,7 +123,7 @@ def _to_timestamptz(s):
         dt = pd.to_datetime(txt, utc=True)
         return dt.isoformat()
     except Exception:
-        # fallback contrôlé (évitons de crasher, mais on n’invente pas une date lointaine)
+        # fallback contrôlé
         return None
 
 # =========================
@@ -188,7 +185,7 @@ TABLE_COLS = [
 # En-têtes anglais spéciaux déjà gérés
 SPECIAL_HEADER_MAP = {"type":"type_text","media":"media_text","bike":"bike_text","gear":"gear_text"}
 
-# === Nouveau : mapping des en-têtes FR normalisés -> colonnes cibles ===
+# === Mapping des en-têtes FR normalisés -> colonnes cibles ===
 FR_HEADER_MAP = {
     "id_de_l_activite": "activity_id",
     "date_de_l_activite": "activity_date",
@@ -271,7 +268,7 @@ FR_HEADER_MAP = {
     "distance_nouvellement_exploree_sur_route_non_goudronnee": "newly_explored_dirt_distance",
     "nombre_d_activites": "activity_count",
     "nombre_total_de_pas": "total_steps",
-    # "co2_economise": "carbon_saved",  # colonne supprimée de toute façon
+    # "co2_economise": "carbon_saved",
     "longueur_de_piscine": "pool_length",
     "charge_d_entrainement": "training_load",
     "intensite": "intensity",

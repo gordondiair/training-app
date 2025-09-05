@@ -7,8 +7,10 @@ import plotly.express as px
 # CSS + polices
 # =========================
 def inject_base_css():
-    # Injection CSS via un seul composant HTML
-    from textwrap import dedent
+    """
+    Injecte le CSS global (charte + nettoyage du chrome Streamlit)
+    sans laisser d'espace en haut.
+    """
     from streamlit.components.v1 import html
 
     html(dedent("""
@@ -20,34 +22,40 @@ def inject_base_css():
         --radius:18px; --radius-sm:12px; --pad:18px; --focus:#93c5fd;
       }
 
-      /* Typo + layout */
+      /* Typo + reset léger */
       html, body, [class*="css"] {
         font-family: 'Inter',system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
         color: var(--text);
       }
+      h1, h2, h3 { letter-spacing:-0.01em; margin-top:0; }
+      h1 { font-weight:800; } h2 { font-weight:700; } h3 { font-weight:600; }
 
-      /* Masquer le chrome Streamlit SANS espace */
+      /* Masquer le chrome Streamlit SANS laisser d'espace */
       #MainMenu { display:none !important; }
       header, [data-testid="stHeader"] { display:none !important; height:0 !important; visibility:hidden !important; }
-      footer { display:none !important; }
+      footer { display:none !important; } /* footer natif */
 
-      /* Conteneur principal : pas de padding-top */
-      .appview-container > .main { padding-top: 0 !important; margin-top: 0 !important; }
+      /* Conteneur principal : zéro espace en haut */
+      .appview-container > .main { padding-top:0 !important; margin-top:0 !important; }
       .appview-container .main .block-container{
         max-width:1200px;
         padding-top:0 !important;
         margin-top:0 !important;
       }
 
-      /* ⚠️ Supprime la marge du wrapper autour de notre iframe (cause du "gros blanc") */
-      .appview-container .main .block-container > .element-container:first-child { margin-top:0 !important; }
+      /* Supprime tout offset du PREMIER élément */
+      .appview-container .main .block-container > .element-container:first-child,
+      .appview-container .main .block-container > .element-container:first-child > div,
+      .appview-container .main .block-container > :first-child {
+        margin-top:0 !important;
+        padding-top:0 !important;
+        height:auto !important;
+      }
+
+      /* Si l'iframe d'injection CSS laisse un wrapper, on le neutralise */
       .appview-container .main .block-container > .element-container:has(> iframe[height="0"]) {
         margin:0 !important; padding:0 !important; height:0 !important;
       }
-
-      /* Titres */
-      h1, h2, h3 { letter-spacing:-0.01em; }
-      h1 { font-weight:800; } h2 { font-weight:700; } h3 { font-weight:600; }
 
       /* Cards */
       .card{
@@ -59,7 +67,7 @@ def inject_base_css():
         padding:var(--pad);
       }
 
-      /* Sidebar */
+      /* Sidebar propre */
       section[data-testid="stSidebar"]{ background:#fff !important; border-right:1px solid var(--border); }
       section[data-testid="stSidebar"] .block-container{ padding-top:1rem; }
       section[data-testid="stSidebar"] a{ color:var(--text); text-decoration:none; }
@@ -113,7 +121,7 @@ def inject_base_css():
         border-radius:14px !important; border:1px dashed var(--border) !important; background:var(--bg2) !important;
       }
 
-      /* Charts */
+      /* Charts wrapper */
       .element-container:has(.js-plotly-plot) .stPlotlyChart{
         border:1px solid var(--border); border-radius:12px; padding:6px; background:#fff; box-shadow:var(--shadow);
       }
@@ -123,7 +131,7 @@ def inject_base_css():
       ::-webkit-scrollbar-thumb{ background:#d1d5db; border-radius:999px; }
       ::-webkit-scrollbar-thumb:hover{ background:#9ca3af; }
 
-      /* Footer custom */
+      /* Footer custom (le tien) */
       .app-footer{ color:var(--muted); font-size:13px; margin-top:32px; }
     </style>
 
@@ -185,7 +193,7 @@ def callout(text:str, tone:str="info"):
 
 def app_footer(brand_name:str="Training App", site_url:str=None, email:str=None):
     site = f' · <a href="{site_url}" target="_blank">Site</a>' if site_url else ""
-    mail = f' · <a href="mailto:{email}">Contact</a>' if email else ""
+    mail = f' · <a href="mailto:{email}">Contact</a>" if email else ""
     st.markdown(f"""<div class="app-footer">© {brand_name} — Built with ❤️{site}{mail}</div>""", unsafe_allow_html=True)
 
 # =========================

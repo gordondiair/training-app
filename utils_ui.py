@@ -52,7 +52,7 @@ def inject_base_css():
         height:auto !important;
       }
 
-      /* Si l'iframe d'injection CSS laisse un wrapper, on le neutralise */
+      /* Neutralise le wrapper de l'iframe d'injection si présent */
       .appview-container .main .block-container > .element-container:has(> iframe[height="0"]) {
         margin:0 !important; padding:0 !important; height:0 !important;
       }
@@ -118,7 +118,7 @@ def inject_base_css():
 
       /* Uploader */
       section[data-testid="stFileUploader"] div[role="button"]{
-        border-radius:14px !important; border:1px dashed var(--border) !important; background:var(--bg2) !important;
+        border-radius:14px !important; border:1px dashed var(--border) !important; background:#f6f7fb !important;
       }
 
       /* Charts wrapper */
@@ -193,7 +193,7 @@ def callout(text:str, tone:str="info"):
 
 def app_footer(brand_name:str="Training App", site_url:str=None, email:str=None):
     site = f' · <a href="{site_url}" target="_blank">Site</a>' if site_url else ""
-    mail = f' · <a href="mailto:{email}">Contact</a>" if email else ""
+    mail = f' · <a href="mailto:{email}">Contact</a>' if email else ""
     st.markdown(f"""<div class="app-footer">© {brand_name} — Built with ❤️{site}{mail}</div>""", unsafe_allow_html=True)
 
 # =========================

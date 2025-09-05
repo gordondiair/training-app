@@ -6,10 +6,9 @@ import plotly.express as px
 # =========================
 # CSS + polices
 # =========================
-# utils_ui.py
 def inject_base_css():
-    from textwrap import dedent
-    from streamlit.components.v1 import html  # <- composant HTML sûr
+    # Injection via composant HTML (jamais affiché en clair)
+    from streamlit.components.v1 import html
 
     css = dedent("""
     <style>
@@ -21,38 +20,59 @@ def inject_base_css():
       }
 
       /* Typo + layout */
-      html, body, [class*="css"] { font-family: 'Inter',system-ui,-apple-system,Segoe UI,Roboto,sans-serif; color: var(--text); }
-      .appview-container .main .block-container{ max-width:1200px; padding-top:1rem; }
+      html, body, [class*="css"] {
+        font-family: 'Inter',system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+        color: var(--text);
+      }
 
-      /* Masquer le chrome Streamlit */
-      #MainMenu { visibility:hidden; }
-      header { visibility:hidden; }
-      footer { visibility:hidden; } /* footer Streamlit natif */
+      /* Conteneur principal (compense la disparition du header) */
+      .appview-container .main .block-container{
+        max-width:1200px;
+        padding-top:0.25rem !important;  /* avant: 1rem */
+      }
+
+      /* Masquer le chrome Streamlit SANS laisser d'espace */
+      #MainMenu { display:none !important; }
+      header, [data-testid="stHeader"] { display:none !important; height:0 !important; visibility:hidden !important; }
+      footer { display:none !important; } /* footer Streamlit natif */
 
       /* Titres */
       h1, h2, h3 { letter-spacing:-0.01em; }
       h1 { font-weight:800; } h2 { font-weight:700; } h3 { font-weight:600; }
 
       /* Cards */
-      .card{ background:var(--bg); border:1px solid var(--border); border-radius:var(--radius);
-             padding:var(--pad); box-shadow:var(--shadow); }
-      .card-ghost{ background:var(--bg2); border:1px dashed var(--border); border-radius:var(--radius); padding:var(--pad); }
+      .card{
+        background:var(--bg); border:1px solid var(--border); border-radius:var(--radius);
+        padding:var(--pad); box-shadow:var(--shadow);
+      }
+      .card-ghost{
+        background:var(--bg2); border:1px dashed var(--border); border-radius:var(--radius);
+        padding:var(--pad);
+      }
 
       /* Sidebar */
       section[data-testid="stSidebar"]{ background:#fff !important; border-right:1px solid var(--border); }
       section[data-testid="stSidebar"] .block-container{ padding-top:1rem; }
+      section[data-testid="stSidebar"] a{ color:var(--text); text-decoration:none; }
+      section[data-testid="stSidebar"] a:hover{ color:var(--brand); }
 
       /* Pills */
-      .pill{ display:inline-flex; gap:8px; align-items:center; padding:6px 10px; border-radius:999px;
-             font-size:12px; font-weight:600; background:#eef2ff; color:#1e3a8a; border:1px solid #dbeafe; margin-bottom:6px; }
+      .pill{
+        display:inline-flex; gap:8px; align-items:center; padding:6px 10px; border-radius:999px;
+        font-size:12px; font-weight:600; background:#eef2ff; color:#1e3a8a; border:1px solid #dbeafe; margin-bottom:6px;
+      }
 
       /* Boutons */
       div.stButton > button, button[kind="primary"]{
         border-radius:999px !important; padding:10px 18px !important;
-        border:1px solid var(--brand) !important; color:#fff !important; background:var(--brand) !important; box-shadow:var(--shadow) !important;
+        border:1px solid var(--brand) !important; color:#fff !important;
+        background:var(--brand) !important; box-shadow:var(--shadow) !important;
       }
       div.stButton > button:hover, button[kind="primary"]:hover{ filter:brightness(0.95); }
-      button[kind="secondary"]{ border-radius:999px !important; border:1px solid var(--border) !important; background:#fff !important; color:var(--text) !important; }
+      button[kind="secondary"]{
+        border-radius:999px !important; border:1px solid var(--border) !important;
+        background:#fff !important; color:var(--text) !important;
+      }
 
       /* Inputs & focus */
       .stTextInput>div>div>input, .stNumberInput input, textarea, select,
@@ -66,8 +86,11 @@ def inject_base_css():
 
       /* Tabs */
       .stTabs [data-baseweb="tab-list"]{ gap:8px; border-bottom:1px solid var(--border); }
-      .stTabs [data-baseweb="tab"]{ border:1px solid var(--border); border-bottom:none; border-top-left-radius:12px; border-top-right-radius:12px;
-                                    background:#fff; padding:8px 12px; }
+      .stTabs [data-baseweb="tab"]{
+        border:1px solid var(--border); border-bottom:none;
+        border-top-left-radius:12px; border-top-right-radius:12px;
+        background:#fff; padding:8px 12px;
+      }
       .stTabs [aria-selected="true"]{ background:#eef2ff; border-color:#dbeafe; color:#1e3a8a; }
 
       /* Tables */
@@ -82,7 +105,9 @@ def inject_base_css():
       }
 
       /* Charts */
-      .element-container:has(.js-plotly-plot) .stPlotlyChart{ border:1px solid var(--border); border-radius:12px; padding:6px; background:#fff; box-shadow:var(--shadow); }
+      .element-container:has(.js-plotly-plot) .stPlotlyChart{
+        border:1px solid var(--border); border-radius:12px; padding:6px; background:#fff; box-shadow:var(--shadow);
+      }
 
       /* Scrollbar discrète */
       ::-webkit-scrollbar{ width:10px; height:10px; }
@@ -94,11 +119,10 @@ def inject_base_css():
     </style>
     """)
 
-    # Injection via un iframe vide (hauteur 0) : jamais affiché en clair
+    # Injecte CSS + police
     html(css, height=0)
-    # Police (Inter)
-    html('<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700;800&display=swap" rel="stylesheet">', height=0)
-
+    html('<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>'
+         '<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700;800&display=swap" rel="stylesheet">', height=0)
 
 
 # =========================
@@ -167,7 +191,6 @@ def apply_plotly_theme(fig):
         yaxis=dict(gridcolor="#f1f5f9", zeroline=False),
         margin=dict(l=10, r=10, t=50, b=10)
     )
-    # bords doux sur les barres/markers
     try:
         fig.update_traces(marker_line_color="#e5e7eb", marker_line_width=1)
     except Exception:
@@ -181,4 +204,3 @@ def bar(df, x:str, y:str, title:str=""):
 def line(df, x:str, y:str, title:str=""):
     fig = px.line(df, x=x, y=y, title=title)
     return apply_plotly_theme(fig)
-

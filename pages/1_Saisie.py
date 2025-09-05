@@ -9,11 +9,9 @@ u = require_login(sb)  # bloque tant que l'utilisateur n'est pas connecté
 st.session_state["user"] = {"id": u.user.id, "email": u.user.email}
 # --- Fin du header commun ---
 
-from utils_ui import inject_base_css, hero, section, stat_cards, callout, app_footer
-inject_base_css()
-
 from datetime import date
 
+st.set_page_config(page_title="Saisie — Journal", layout="wide")
 st.title("Saisie — Journal")
 
 # ---------- Styles (boutons = style par défaut; checkbox verte seulement)

@@ -8,146 +8,164 @@ import plotly.express as px
 # =========================
 def inject_base_css():
     """
-    Injecte le CSS global (charte + nettoyage du chrome Streamlit)
-    sans laisser d'espace en haut.
+    Identité visuelle nature (verts + tons terre), simple et épurée.
+    Ne masque pas le header/menu Streamlit.
     """
-    from streamlit.components.v1 import html
-
-    html(dedent("""
+    st.markdown(dedent("""
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700;800&display=swap" rel="stylesheet">
     <style>
       :root{
-        --brand:#2563eb; --ok:#16a34a; --warn:#f59e0b; --danger:#ef4444;
-        --bg:#ffffff; --bg2:#f6f7fb; --text:#0b1220; --muted:#6b7280;
-        --border:#e5e7eb; --shadow:0 10px 30px rgba(0,0,0,.06);
-        --radius:18px; --radius-sm:12px; --pad:18px; --focus:#93c5fd;
+        /* Palette nature */
+        --leaf:#16a34a;         /* vert feuille (primary) */
+        --pine:#166534;         /* vert pin (hover/texte accent) */
+        --sky:#0ea5e9;          /* bleu ciel (accent soft) */
+        --earth:#8b5e34;        /* terre cuivrée (accent secondaire) */
+        --sun:#f59e0b;          /* soleil (warning doux) */
+
+        --bg:#fbfcf9;           /* fond ivoire très clair */
+        --bg2:#f2f6ef;          /* fond alt / ghost */
+        --text:#0b1220;         /* texte */
+        --muted:#6b7280;        /* texte atténué */
+        --border:#e5e7eb;       /* bordure */
+        --shadow:0 10px 30px rgba(0,0,0,.06);
+
+        --radius:18px; --radius-sm:12px; --pad:18px;
+        --focus:#a7f3d0;        /* focus vert menthe */
       }
 
-      /* Typo + reset léger */
       html, body, [class*="css"] {
-        font-family: 'Inter',system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+        font-family: 'Inter', system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
         color: var(--text);
+        background: var(--bg);
       }
+
+      /* Titres */
       h1, h2, h3 { letter-spacing:-0.01em; margin-top:0; }
-      h1 { font-weight:800; } h2 { font-weight:700; } h3 { font-weight:600; }
+      h1 { font-weight:800; }
+      h2 { font-weight:700; }
+      h3 { font-weight:600; }
 
-      /* Masquer le chrome Streamlit SANS laisser d'espace */
-      #MainMenu { display:none !important; }
-      header, [data-testid="stHeader"] { display:none !important; height:0 !important; visibility:hidden !important; }
-      footer { display:none !important; } /* footer natif */
-
-      /* Conteneur principal : zéro espace en haut */
-      .appview-container > .main { padding-top:0 !important; margin-top:0 !important; }
+      /* Conteneur principal */
       .appview-container .main .block-container{
-        max-width:1200px;
-        padding-top:0 !important;
-        margin-top:0 !important;
-      }
-
-      /* Supprime tout offset du PREMIER élément */
-      .appview-container .main .block-container > .element-container:first-child,
-      .appview-container .main .block-container > .element-container:first-child > div,
-      .appview-container .main .block-container > :first-child {
-        margin-top:0 !important;
-        padding-top:0 !important;
-        height:auto !important;
-      }
-
-      /* Neutralise le wrapper de l'iframe d'injection si présent */
-      .appview-container .main .block-container > .element-container:has(> iframe[height="0"]) {
-        margin:0 !important; padding:0 !important; height:0 !important;
+        max-width: 1200px;
+        padding-top: 1rem;
       }
 
       /* Cards */
       .card{
-        background:var(--bg); border:1px solid var(--border); border-radius:var(--radius);
-        padding:var(--pad); box-shadow:var(--shadow);
+        background: #ffffff;
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        padding: var(--pad);
+        box-shadow: var(--shadow);
       }
       .card-ghost{
-        background:var(--bg2); border:1px dashed var(--border); border-radius:var(--radius);
-        padding:var(--pad);
+        background: var(--bg2);
+        border: 1px dashed var(--border);
+        border-radius: var(--radius);
+        padding: var(--pad);
       }
 
-      /* Sidebar propre */
-      section[data-testid="stSidebar"]{ background:#fff !important; border-right:1px solid var(--border); }
-      section[data-testid="stSidebar"] .block-container{ padding-top:1rem; }
-      section[data-testid="stSidebar"] a{ color:var(--text); text-decoration:none; }
-      section[data-testid="stSidebar"] a:hover{ color:var(--brand); }
+      /* Sidebar nature discrète (on garde le header Streamlit) */
+      section[data-testid="stSidebar"]{
+        background: #ffffff !important;
+        border-right: 1px solid var(--border);
+      }
+      section[data-testid="stSidebar"] .block-container{ padding-top: 1rem; }
+      section[data-testid="stSidebar"] a{ color: var(--text); text-decoration: none; }
+      section[data-testid="stSidebar"] a:hover{ color: var(--leaf); }
 
-      /* Pills */
+      /* Badge / pill */
       .pill{
-        display:inline-flex; gap:8px; align-items:center; padding:6px 10px; border-radius:999px;
-        font-size:12px; font-weight:600; background:#eef2ff; color:#1e3a8a; border:1px solid #dbeafe; margin-bottom:6px;
+        display:inline-flex; gap:8px; align-items:center;
+        padding:6px 10px; border-radius:999px; font-size:12px; font-weight:600;
+        background:#ecfdf5; color:#065f46; border:1px solid #bbf7d0;
+        margin-bottom:6px;
       }
 
       /* Boutons */
       div.stButton > button, button[kind="primary"]{
-        border-radius:999px !important; padding:10px 18px !important;
-        border:1px solid var(--brand) !important; color:#fff !important;
-        background:var(--brand) !important; box-shadow:var(--shadow) !important;
+        border-radius: 999px !important;
+        padding: 10px 18px !important;
+        border: 1px solid var(--leaf) !important;
+        color: #fff !important;
+        background: var(--leaf) !important;
+        box-shadow: var(--shadow) !important;
       }
-      div.stButton > button:hover, button[kind="primary"]:hover{ filter:brightness(0.95); }
+      div.stButton > button:hover, button[kind="primary"]:hover{ background: var(--pine) !important; }
+
       button[kind="secondary"]{
-        border-radius:999px !important; border:1px solid var(--border) !important;
+        border-radius: 999px !important;
+        border:1px solid var(--border) !important;
         background:#fff !important; color:var(--text) !important;
       }
 
       /* Inputs & focus */
       .stTextInput>div>div>input, .stNumberInput input, textarea, select,
       .stTextArea textarea, .stDateInput input, .stTimeInput input{
-        border-radius:12px !important; border:1px solid var(--border) !important; background:#fff !important;
+        border-radius: 12px !important;
+        border:1px solid var(--border) !important;
+        background: #fff !important;
       }
       .stTextInput>div>div>input:focus, .stNumberInput input:focus, textarea:focus, select:focus,
       .stTextArea textarea:focus, .stDateInput input:focus, .stTimeInput input:focus{
-        outline:3px solid var(--focus) !important; border-color:#bfdbfe !important;
+        outline: 3px solid var(--focus) !important;
+        border-color: #86efac !important;
       }
+      input[type="checkbox"], input[type="radio"]{ accent-color: var(--leaf); }
 
-      /* Tabs */
-      .stTabs [data-baseweb="tab-list"]{ gap:8px; border-bottom:1px solid var(--border); }
+      /* Onglets */
+      .stTabs [data-baseweb="tab-list"]{
+        gap:8px; border-bottom:1px solid var(--border);
+      }
       .stTabs [data-baseweb="tab"]{
         border:1px solid var(--border); border-bottom:none;
-        border-top-left-radius:12px; border-top-right-radius:12px;
+        border-top-left-radius: 12px; border-top-right-radius:12px;
         background:#fff; padding:8px 12px;
       }
-      .stTabs [aria-selected="true"]{ background:#eef2ff; border-color:#dbeafe; color:#1e3a8a; }
+      .stTabs [aria-selected="true"]{
+        background:#ecfdf5; border-color:#bbf7d0; color:#065f46;
+      }
 
-      /* Tables */
-      .styled-table{ width:100%; border-collapse:collapse; border:1px solid var(--border); border-radius:var(--radius); overflow:hidden; }
-      .styled-table th, .styled-table td{ padding:12px 14px; border-bottom:1px solid var(--border); }
-      .styled-table tr:hover{ background:#fafafa }
-      div[data-testid="stDataFrame"]{ border:1px solid var(--border); border-radius:12px; }
+      /* Tableaux */
+      .styled-table { width: 100%; border-collapse: collapse; border:1px solid var(--border);
+                      border-radius: var(--radius); overflow:hidden; }
+      .styled-table th, .styled-table td { padding: 12px 14px; border-bottom:1px solid var(--border); }
+      .styled-table tr:hover { background:#fafafa }
+
+      /* DataFrame container */
+      div[data-testid="stDataFrame"] { border:1px solid var(--border); border-radius:12px; }
 
       /* Uploader */
       section[data-testid="stFileUploader"] div[role="button"]{
-        border-radius:14px !important; border:1px dashed var(--border) !important; background:#f6f7fb !important;
+        border-radius: 14px !important;
+        border: 1px dashed var(--border) !important;
+        background: var(--bg2) !important;
       }
 
       /* Charts wrapper */
       .element-container:has(.js-plotly-plot) .stPlotlyChart{
-        border:1px solid var(--border); border-radius:12px; padding:6px; background:#fff; box-shadow:var(--shadow);
+        border:1px solid var(--border); border-radius:12px; padding:6px;
+        background:#fff; box-shadow: var(--shadow);
       }
 
-      /* Scrollbar discrète */
-      ::-webkit-scrollbar{ width:10px; height:10px; }
-      ::-webkit-scrollbar-thumb{ background:#d1d5db; border-radius:999px; }
-      ::-webkit-scrollbar-thumb:hover{ background:#9ca3af; }
+      /* Liens */
+      a { color: var(--leaf); }
+      a:hover { color: var(--pine); }
 
-      /* Footer custom (le tien) */
-      .app-footer{ color:var(--muted); font-size:13px; margin-top:32px; }
+      /* Footer custom */
+      .app-footer { color:var(--muted); font-size:13px; margin-top:32px; }
     </style>
-
-    <!-- Police Inter -->
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700;800&display=swap" rel="stylesheet">
-    """), height=0)
-
+    """), unsafe_allow_html=True)
 
 # =========================
 # Composants
 # =========================
-def hero(title:str, subtitle:str="", emoji:str="✨", cta_label:str=None, cta_key:str="hero-cta"):
+def hero(title:str, subtitle:str="", emoji:str="🌿", cta_label:str=None, cta_key:str="hero-cta"):
     st.markdown(f"""
     <div class="card" style="padding:28px;">
-      <div class="pill">{emoji} Nouveauté</div>
+      <div class="pill">{emoji} Nature</div>
       <h1 style="margin:6px 0 6px 0; font-size:34px;">{title}</h1>
       <p style="margin:0; color:var(--muted); font-size:15px; max-width:900px;">{subtitle}</p>
     </div>
@@ -170,11 +188,12 @@ def stat_cards(items):
     cols = st.columns(len(items))
     for c, it in zip(cols, items):
         with c:
+            color = "#16a34a" if str(it.get("delta","")).strip().startswith("+") else "#dc2626"
             st.markdown(f"""
             <div class="card">
               <div style="font-size:13px; color:var(--muted); margin-bottom:6px;">{it.get('label','')}</div>
               <div style="font-size:28px; font-weight:800; line-height:1;">{it.get('value','—')}</div>
-              <div style="font-size:12px; color:{'#16a34a' if str(it.get('delta','')).startswith('+') else '#dc2626'}; margin-top:6px;">
+              <div style="font-size:12px; color:{color}; margin-top:6px;">
                 {it.get('delta','')}
               </div>
             </div>
@@ -183,40 +202,46 @@ def stat_cards(items):
                 st.caption(it["help"])
 
 def callout(text:str, tone:str="info"):
-    colors = {"info":"#eef2ff", "ok":"#ecfdf5", "warn":"#fff7ed"}
-    borders = {"info":"#dbeafe", "ok":"#bbf7d0", "warn":"#fed7aa"}
+    colors = {"info":"#ecfeff", "ok":"#ecfdf5", "warn":"#fff7ed"}
+    borders = {"info":"#bae6fd", "ok":"#bbf7d0", "warn":"#fed7aa"}
     st.markdown(f"""
-    <div class="card" style="background:{colors.get(tone,'#eef2ff')}; border-color:{borders.get(tone,'#dbeafe')}">
+    <div class="card" style="background:{colors.get(tone,'#ecfdf5')}; border-color:{borders.get(tone,'#bbf7d0')}">
       {text}
     </div>
     """, unsafe_allow_html=True)
 
-def app_footer(brand_name:str="Training App", site_url:str=None, email:str=None):
+def app_footer(brand_name:str="TrailTracker", site_url:str=None, email:str=None):
     site = f' · <a href="{site_url}" target="_blank">Site</a>' if site_url else ""
     mail = f' · <a href="mailto:{email}">Contact</a>' if email else ""
-    st.markdown(f"""<div class="app-footer">© {brand_name} — Built with ❤️{site}{mail}</div>""", unsafe_allow_html=True)
+    st.markdown(f"""<div class="app-footer">© {brand_name} — Conçu avec 🌿{site}{mail}</div>""", unsafe_allow_html=True)
 
 # =========================
 # Plotly : style harmonisé
 # =========================
 def apply_plotly_theme(fig):
     fig.update_layout(
-        title_x=0.02, bargap=0.25, plot_bgcolor="#ffffff", paper_bgcolor="#ffffff",
-        font=dict(family="Inter, system-ui, -apple-system, Segoe UI, Roboto, sans-serif", size=14, color="#0b1220"),
+        title_x=0.02, bargap=0.25,
+        plot_bgcolor="#ffffff", paper_bgcolor="#ffffff",
+        font=dict(family="Inter, system-ui, -apple-system, Segoe UI, Roboto, sans-serif",
+                  size=14, color="#0b1220"),
         xaxis=dict(showgrid=False, linecolor="#e5e7eb", tickangle=-30),
-        yaxis=dict(gridcolor="#f1f5f9", zeroline=False),
+        yaxis=dict(gridcolor="#eaf2e8", zeroline=False),
         margin=dict(l=10, r=10, t=50, b=10)
     )
+    # Traces : liseré doux
     try:
-        fig.update_traces(marker_line_color="#e5e7eb", marker_line_width=1)
+        fig.update_traces(marker_line_color="#e5e7eb", marker_line_width=1,
+                          line=dict(width=2))
     except Exception:
         pass
     return fig
 
 def bar(df, x:str, y:str, title:str=""):
-    fig = px.bar(df, x=x, y=y, title=title)
+    fig = px.bar(df, x=x, y=y, title=title,
+                 color_discrete_sequence=["#16a34a"])
     return apply_plotly_theme(fig)
 
 def line(df, x:str, y:str, title:str=""):
-    fig = px.line(df, x=x, y=y, title=title)
+    fig = px.line(df, x=x, y=y, title=title,
+                  color_discrete_sequence=["#166534"])
     return apply_plotly_theme(fig)

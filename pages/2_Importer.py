@@ -18,29 +18,47 @@ st.set_page_config(page_title="Importer — Strava", layout="wide")
 # =========================
 # Helpers
 # =========================
-_NUMERIC_STR_RE = re.compile(r'^[+-]?\d+(\.\d+)?$')
+_NUMERIC_STR_RE = re.compile(r'^[+-]?\d+(?:[.,]\d+)?$')  # ← gère , et .
 
 def _looks_numeric_str(s: Any) -> bool:
     return isinstance(s, str) and _NUMERIC_STR_RE.match(s.strip() or "") is not None
 
 def _coerce_numeric_str_any(s: Any):
-    """'7'/'7.0'/'-3.50' -> int ou float ; sinon inchangé."""
-    if not _looks_numeric_str(s):
+    """'7'/'7.0'/'7,0'/'-3,50' -> int ou float ; sinon inchangé."""
+    if s is None:
         return s
-    try:
-        f = float(s.strip())
-    except Exception:
+    # si c'est déjà un nombre
+    if isinstance(s, (int, float)):
+        try:
+            if isinstance(s, float) and not math.isfinite(s):
+                return None
+            return s
+        except Exception:
+            return None
+    if not isinstance(s, str):
         return s
-    if math.isfinite(f) and float(f).is_integer():
-        return int(f)
-    return f if math.isfinite(f) else None
+    raw = s.strip()
+    if raw == "":
+        return None
+    if _looks_numeric_str(raw):
+        # virgule décimale -> point si pas déjà de point
+        if "," in raw and "." not in raw:
+            raw = raw.replace(",", ".")
+        try:
+            f = float(raw)
+        except Exception:
+            return s
+        if math.isfinite(f) and float(f).is_integer():
+            return int(f)
+        return f if math.isfinite(f) else None
+    return s
 
 def _snake(s: str) -> str:
     if s is None:
         return s
     s = unicodedata.normalize("NFKD", s).encode("ascii", "ignore").decode("ascii")
     s = s.strip().lower()
-    s = s.replace(".", "_").replace("-", "_").replace("/", "_").replace(" ", "_")
+    s = s.replace(".", "_").replace("-", "_").replace("/", "_").replace(" ", "_").replace("’", "_").replace("'", "_")
     while "__" in s:
         s = s.replace("__", "_")
     return s
@@ -93,7 +111,7 @@ def _to_timestamptz(s):
     if s is None or (isinstance(s, float) and pd.isna(s)) or str(s).strip()=="":
         return None
     txt = str(s).strip()
-    for fmt in ("%Y-%m-%d %H:%M:%S%z", "%Y-%m-%d %H:%M:%S", "%d/%m/%Y %H:%M:%S", "%Y-%m-%d"):
+    for fmt in ("%Y-%m-%d %H:%M:%S%z", "%Y-%m-%d %H:%M:%S", "%d/%m/%Y %H:%M:%S", "%Y-%m-%d", "%d/%m/%Y"):
         try:
             dt = datetime.strptime(txt, fmt)
             if dt.tzinfo is None:
@@ -105,7 +123,8 @@ def _to_timestamptz(s):
         dt = pd.to_datetime(txt, utc=True)
         return dt.isoformat()
     except Exception:
-        return datetime.now(timezone.utc).isoformat()
+        # fallback contrôlé (évitons de crasher, mais on n’invente pas une date lointaine)
+        return None
 
 # =========================
 # Conversions spécifiques
@@ -129,8 +148,7 @@ def _ms_to_min_per_km(x):
     return 1000.0 / (v * 60.0)  # = 16.6666667 / v
 
 # =========================
-# Schéma / Types
-# (colonnes supprimées retirées du schéma)
+# Schéma / Types (identiques à ta version)
 # =========================
 TABLE_COLS = [
     "activity_id","activity_date","activity_name","activity_type","activity_description",
@@ -164,16 +182,113 @@ TABLE_COLS = [
     "long_run","for_a_cause","media_text",
 ]
 
+# En-têtes anglais spéciaux déjà gérés
 SPECIAL_HEADER_MAP = {"type":"type_text","media":"media_text","bike":"bike_text","gear":"gear_text"}
+
+# === Nouveau : mapping des en-têtes FR normalisés -> colonnes cibles ===
+FR_HEADER_MAP = {
+    "id_de_l_activite": "activity_id",
+    "date_de_l_activite": "activity_date",
+    "nom_de_l_activite": "activity_name",
+    "type_d_activite": "activity_type",
+    "description_de_l_activite": "activity_description",
+    "temps_ecoule": "elapsed_time",
+    "distance": "distance",
+    "frequence_cardiaque_max": "max_heart_rate",
+    "effort_relatif": "relative_effort",
+    "deplacement_transport": "commute",
+    "note_privee_sur_les_activites": "activity_private_note",
+    "materiel_utilise_pour_l_activite": "activity_gear",
+    "nom_du_fichier": "filename",
+    "poids_de_l_athlete": "athlete_weight",
+    "poids_du_velo": "bike_weight",
+    "temps_ecoule_1": "elapsed_time_1",
+    "temps_en_mouvement": "moving_time",
+    "distance_1": "distance_1",
+    "vitesse_max": "max_speed",
+    "vitesse_moyenne": "average_speed",
+    "denivele_positif": "elevation_gain",
+    "denivele_negatif": "elevation_loss",
+    "altitude_min": "elevation_low",
+    "altitude_max": "elevation_high",
+    "pente_max": "max_grade",
+    "pente_moyenne": "average_grade",
+    "pente_positive_moyenne": "average_positive_grade",
+    "pente_negative_moyenne": "average_negative_grade",
+    "cadence_max": "max_cadence",
+    "cadence_moyenne": "average_cadence",
+    "frequence_cardiaque_max_1": "max_heart_rate_1",
+    "frequence_cardiaque_moyenne": "average_heart_rate",
+    "calories": "calories",
+    "temperature_max": "max_temperature",
+    "temperature_moyenne": "average_temperature",
+    "effort_relatif_1": "relative_effort_1",
+    "effort_total": "total_work",
+    "nombre_de_sorties_course_a_pied": "number_of_runs",
+    "temps_de_montee": "uphill_time",
+    "temps_de_descente": "downhill_time",
+    "autres_temps": "other_time",
+    "effort_ressenti": "perceived_exertion",
+    "type": "type_text",
+    "heure_de_debut": "start_time",
+    "puissance_moyenne_ponderee": "weighted_average_power",
+    "nombre_d_echantillons_de_puissance": "power_count",
+    "utiliser_l_effort_ressenti": "prefer_perceived_exertion",
+    "effort_relatif_ressenti": "perceived_relative_effort",
+    "deplacement_transport_1": "commute_1",
+    "poids_total_souleve": "total_weight_lifted",
+    "depuis_un_import": "from_upload",
+    "importe": "from_upload",
+    "distance_ajustee_selon_la_pente": "grade_adjusted_distance",
+    "heure_d_observation_meteo": "weather_observation_time",
+    "conditions_meteo": "weather_condition",
+    "temperature": "weather_temperature",
+    "temperature_ressentie": "apparent_temperature",
+    "point_de_rosee": "dewpoint",
+    "humidite": "humidity",
+    "pression_meteo": "weather_pressure",
+    "vitesse_du_vent": "wind_speed",
+    "rafale_de_vent": "wind_gust",
+    "direction_du_vent": "wind_bearing",
+    "intensite_des_precipitations": "precipitation_intensity",
+    "phase_lunaire": "moon_phase",
+    "probabilite_de_precipitations": "precipitation_probability",
+    "type_de_precipitations": "precipitation_type",
+    "nebulosite": "cloud_cover",
+    "visibilite_meteo": "weather_visibility",
+    "indice_uv": "uv_index",
+    "ozone_meteo": "weather_ozone",
+    "sauts": "jump_count",
+    "grit_total": "total_grit",
+    "flow_moyen": "average_flow",
+    "signale": "flagged",
+    "vitesse_moyenne_ecoulee": "average_elapsed_speed",
+    "distance_sur_route_non_goudronnee": "dirt_distance",
+    "distance_nouvellement_exploree": "newly_explored_distance",
+    "distance_nouvellement_exploree_sur_route_non_goudronnee": "newly_explored_dirt_distance",
+    "nombre_d_activites": "activity_count",
+    "nombre_total_de_pas": "total_steps",
+    # "co2_economise": "carbon_saved",  # colonne supprimée de toute façon
+    "longueur_de_piscine": "pool_length",
+    "charge_d_entrainement": "training_load",
+    "intensite": "intensity",
+    "vitesse_moyenne_ajustee_selon_la_pente": "average_grade_adjusted_pace",
+    "temps_enregistre_par_le_chronometre": "timer_time",
+    "nombre_total_de_cycles": "total_cycles",
+    "recuperation": "recovery",
+    "avec_mon_animal_de_compagnie": "with_pet",
+    "competition": "competition",
+    "sortie_longue": "long_run",
+    "pour_la_bonne_cause": "for_a_cause",
+    "support": "media_text",
+}
 
 # Types par colonne
 BOOL_COLS  = {"commute","prefer_perceived_exertion","commute_1","from_upload","flagged","with_pet","competition","long_run","for_a_cause"}
-# elapsed_time reste INT (minutes entières)
 INT_COLS   = {"elapsed_time","activity_id","uphill_time","downhill_time","other_time","power_count","perceived_relative_effort","relative_effort_1","number_of_runs","jump_count","total_cycles","timer_time","max_heart_rate_1","average_heart_rate","total_steps"}
-TIME_COLS  = {"start_time"}  # sunrise/sunset supprimés
+TIME_COLS  = {"start_time"}
 TS_COLS    = {"activity_date","weather_observation_time"}
 
-# FLOAT_COLS est tout le reste non bool/int/time/ts:
 FLOAT_COLS = set(TABLE_COLS) - BOOL_COLS - INT_COLS - TIME_COLS - TS_COLS - {
     "type_text","activity_name","activity_type","activity_description","activity_private_note",
     "activity_gear","filename","weather_condition","precipitation_type","media_text"
@@ -193,10 +308,10 @@ for c in TIME_COLS:  CONVERTER_BY_COL[c] = _to_time
 for c in TS_COLS:    CONVERTER_BY_COL[c] = _to_timestamptz
 for c in TEXT_COLS:  CONVERTER_BY_COL[c] = _text_conv
 
-# ⚠️ Distances Strava : déjà en km → aucune conversion /1000
+# Distances Strava : déjà en km
 DIST_M_COLS = set()  # (désactivé)
 
-# Doublons: tolérances (sur km)
+# Doublons: tolérances (sur km / mètres)
 D_TOL_KM, DPLUS_TOL, DMOINS_TOL = 0.2, 50.0, 50.0
 
 # =========================
@@ -213,7 +328,7 @@ sidebar_logout_bottom(sb)
 # =========================
 # UI
 # =========================
-st.markdown("Charge ton fichier **activities.csv** exporté depuis Strava.")
+st.markdown("Charge ton fichier **activities.csv** exporté depuis Strava (anglais **ou** français).")
 up = st.file_uploader("Déposer le CSV Strava", type=["csv"], accept_multiple_files=False)
 
 global_action_col, apply_col = st.columns([3,1])
@@ -224,13 +339,6 @@ if "import_decisions" not in st.session_state:
 # Normalisation JSON — Garde-fou universel
 # =========================
 def _json_safe_row(row: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    - NaN/NaT -> None
-    - str numérique -> nombre (int si entier)
-    - float entier -> int
-    - inf -> None
-    - timestamps -> ISO
-    """
     safe: Dict[str, Any] = {}
     for k, v in row.items():
         try:
@@ -294,20 +402,45 @@ def do_upserts(rows_insert: List[Dict[str, Any]],
 # =========================
 # Import
 # =========================
+# Normalisation des valeurs de Type activité (FR/EN)
+RUN_TYPES_CANON = {"run", "trail_run", "virtual_run"}
+RUN_TYPES_FR_MAP = {
+    "course_a_pied": "run",
+    "course": "run",
+    "course_sur_sentier": "trail_run",
+    "course_a_pied_virtuelle": "virtual_run",
+}
+
+def _normalize_activity_type_value(v: Any) -> str:
+    if v is None:
+        return ""
+    s = _snake(str(v))
+    return RUN_TYPES_FR_MAP.get(s, s)  # garde l'anglais si déjà présent
+
 if up:
     raw = up.read()
     df = pd.read_csv(io.BytesIO(raw))
 
-    # -- Headers normalisés & remap
-    df.columns = [_snake(c) for c in df.columns]
-    df = df.rename(columns={k: v for k, v in SPECIAL_HEADER_MAP.items() if k in df.columns})
+    # -- Headers normalisés
+    original_cols = list(df.columns)
+    snake_cols = [_snake(c) for c in original_cols]
+    df.columns = snake_cols
 
-    # -- Filtre RUN ONLY
-    RUN_TYPES = {"run", "trail_run", "virtual_run"}  # mets {"run"} si tu veux strict
+    # -- Remap FR -> cibles + remap spéciaux EN
+    rename_map = {}
+    for c in df.columns:
+        if c in FR_HEADER_MAP:
+            rename_map[c] = FR_HEADER_MAP[c]
+        elif c in SPECIAL_HEADER_MAP:
+            rename_map[c] = SPECIAL_HEADER_MAP[c]
+    if rename_map:
+        df = df.rename(columns=rename_map)
+
+    # -- Filtre RUN ONLY (support FR & EN)
     if "activity_type" in df.columns:
-        df["__atype_norm"] = df["activity_type"].astype(str).map(_snake)
+        df["__atype_norm"] = df["activity_type"].map(_normalize_activity_type_value)
         before = len(df)
-        df = df[df["__atype_norm"].isin(RUN_TYPES)].drop(columns=["__atype_norm"])
+        df = df[df["__atype_norm"].isin(RUN_TYPES_CANON)].drop(columns=["__atype_norm"])
         if len(df) == 0:
             st.warning("Aucune activité de type course (run) trouvée dans ce CSV.")
             st.stop()
@@ -326,11 +459,10 @@ if up:
     if to_drop:
         df = df.drop(columns=to_drop)
 
-    # -- Aligner colonnes cibles (sans récréer celles qu'on supprime)
+    # -- Aligner colonnes cibles (sans recréer celles supprimées)
     for col in TABLE_COLS:
         if col not in df.columns:
             df[col] = None
-    # Garder uniquement les colonnes utiles à la BD
     df = df[TABLE_COLS]
 
     # ========= Transformations AVANT typage final =========
@@ -361,7 +493,7 @@ if up:
 
     # (Aucune conversion distance -> km : déjà en km)
 
-    # -- Chaînes numériques -> nombres (universel)
+    # -- Chaînes numériques -> nombres (gère virgules FR)
     for c in df.columns:
         df[c] = df[c].map(_coerce_numeric_str_any)
 
@@ -523,4 +655,4 @@ if up:
                     st.error(f"Erreur pendant l'import : {e}")
 
 else:
-    st.info("Dépose un fichier CSV Strava pour commencer.")
+    st.info("Dépose un fichier CSV Strava (anglais ou français) pour commencer.")

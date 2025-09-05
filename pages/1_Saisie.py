@@ -9,6 +9,9 @@ u = require_login(sb)  # bloque tant que l'utilisateur n'est pas connecté
 st.session_state["user"] = {"id": u.user.id, "email": u.user.email}
 # --- Fin du header commun ---
 
+from utils_ui import inject_base_css, hero, section, stat_cards, callout, app_footer
+inject_base_css()
+
 from datetime import date
 
 st.title("Saisie — Journal")

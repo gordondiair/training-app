@@ -7,10 +7,11 @@ import plotly.express as px
 # CSS + polices
 # =========================
 def inject_base_css():
-    # Injection via composant HTML (jamais affiché en clair)
+    # Injection CSS via un seul composant HTML
+    from textwrap import dedent
     from streamlit.components.v1 import html
 
-    css = dedent("""
+    html(dedent("""
     <style>
       :root{
         --brand:#2563eb; --ok:#16a34a; --warn:#f59e0b; --danger:#ef4444;
@@ -25,16 +26,24 @@ def inject_base_css():
         color: var(--text);
       }
 
-      /* Conteneur principal (compense la disparition du header) */
-      .appview-container .main .block-container{
-        max-width:1200px;
-        padding-top:0.25rem !important;  /* avant: 1rem */
-      }
-
-      /* Masquer le chrome Streamlit SANS laisser d'espace */
+      /* Masquer le chrome Streamlit SANS espace */
       #MainMenu { display:none !important; }
       header, [data-testid="stHeader"] { display:none !important; height:0 !important; visibility:hidden !important; }
-      footer { display:none !important; } /* footer Streamlit natif */
+      footer { display:none !important; }
+
+      /* Conteneur principal : pas de padding-top */
+      .appview-container > .main { padding-top: 0 !important; margin-top: 0 !important; }
+      .appview-container .main .block-container{
+        max-width:1200px;
+        padding-top:0 !important;
+        margin-top:0 !important;
+      }
+
+      /* ⚠️ Supprime la marge du wrapper autour de notre iframe (cause du "gros blanc") */
+      .appview-container .main .block-container > .element-container:first-child { margin-top:0 !important; }
+      .appview-container .main .block-container > .element-container:has(> iframe[height="0"]) {
+        margin:0 !important; padding:0 !important; height:0 !important;
+      }
 
       /* Titres */
       h1, h2, h3 { letter-spacing:-0.01em; }
@@ -114,15 +123,14 @@ def inject_base_css():
       ::-webkit-scrollbar-thumb{ background:#d1d5db; border-radius:999px; }
       ::-webkit-scrollbar-thumb:hover{ background:#9ca3af; }
 
-      /* Footer custom (le tien) */
+      /* Footer custom */
       .app-footer{ color:var(--muted); font-size:13px; margin-top:32px; }
     </style>
-    """)
 
-    # Injecte CSS + police
-    html(css, height=0)
-    html('<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>'
-         '<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700;800&display=swap" rel="stylesheet">', height=0)
+    <!-- Police Inter -->
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700;800&display=swap" rel="stylesheet">
+    """), height=0)
 
 
 # =========================

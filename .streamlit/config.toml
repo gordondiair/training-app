@@ -1,3 +1,10 @@
 [server]
 runOnSave = true
 
+[theme]
+base="light"
+primaryColor="#2563eb"
+backgroundColor="#ffffff"
+secondaryBackgroundColor="#f6f7fb"
+textColor="#0b1220"
+font="sans serif"
